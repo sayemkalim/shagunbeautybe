@@ -3,6 +3,10 @@ const CartRepository = require("../../repositories/cart/index.js");
 const ProductRepository = require("../../repositories/product/index.js");
 const BundleRepository = require("../../repositories/bundle/index.js");
 const ApiResponse = require("../../utils/ApiResponse.js");
+const {
+  getProductQuantityOptions,
+  resolveProductUnitPrice,
+} = require("../../utils/pricing/index.js");
 
 const getCart = async ({ user_id }) => {
   const cart = await CartRepository.getCartByUserId({ user_id });
@@ -19,6 +23,8 @@ const updateCart = async ({
 }) => {
   let cart = await CartRepository.getCartByUserId({ user_id });
 
+  quantity = Number(quantity);
+
   if (quantity < 0) {
     throw new Error("Invalid quantity");
   }
@@ -30,26 +36,35 @@ const updateCart = async ({
     if (!itemData) {
       throw new Error("Product not found");
     }
-    
-    let itemPrice;
-    
-    // If variant_sku is provided, use variant-specific pricing
-    if (variant_sku && Array.isArray(itemData.variants)) {
-      const variant = itemData.variants.find(v => v.sku === variant_sku);
-      if (!variant) {
-        throw new Error(`Variant with SKU '${variant_sku}' not found`);
+
+    let itemPrice = 0;
+
+    if (quantity > 0) {
+      // If variant_sku is provided, use variant-specific pricing (not affected by bulk price tiers)
+      if (variant_sku && Array.isArray(itemData.variants)) {
+        const variant = itemData.variants.find(v => v.sku === variant_sku);
+        if (!variant) {
+          throw new Error(`Variant with SKU '${variant_sku}' not found`);
+        }
+        // Use variant's discounted price if available, otherwise use variant's regular price
+        itemPrice = variant.discounted_price !== null && variant.discounted_price !== undefined
+          ? parseFloat(variant.discounted_price.toString())
+          : parseFloat(variant.price.toString());
+      } else {
+        // Use the product's base/bulk pricing — quantity must match qty=1 or one of the product's price tiers
+        const resolvedPrice = resolveProductUnitPrice(itemData, quantity);
+        if (resolvedPrice === null) {
+          const available = getProductQuantityOptions(itemData)
+            .map((o) => o.quantity)
+            .join(", ");
+          throw new Error(
+            `Invalid quantity ${quantity} for this product. Available quantities: ${available}`
+          );
+        }
+        itemPrice = resolvedPrice;
       }
-      // Use variant's discounted price if available, otherwise use variant's regular price
-      itemPrice = variant.discounted_price !== null && variant.discounted_price !== undefined
-        ? variant.discounted_price
-        : variant.price;
-    } else {
-      // Use product's main pricing
-      itemPrice = itemData.discounted_price !== null
-        ? itemData.discounted_price
-        : itemData.price;
     }
-    
+
     item = {
       type: "product",
       product: product_id,

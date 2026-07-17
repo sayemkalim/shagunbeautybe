@@ -132,6 +132,23 @@ const ProductSchema = new mongoose.Schema(
         images: [String],
       },
     ],
+    // Bulk/pack-size pricing for the base product (not available on variants).
+    // qty=1 is always implicitly priced at discounted_price (or price) — these are the additional pack sizes, e.g. { quantity: 4, price: 410 }.
+    price_tiers: [
+      {
+        quantity: { type: Number, required: true, min: 2 },
+        price: {
+          type: mongoose.Schema.Types.Decimal128,
+          required: true,
+          validate: {
+            validator: function (value) {
+              return value >= 0;
+            },
+            message: "Tier price must be a non-negative number",
+          },
+        },
+      },
+    ],
   },
   { timestamps: true }
 );
@@ -152,6 +169,14 @@ ProductSchema.set("toJSON", {
           : variant.discounted_price,
       }));
     }
+    if (Array.isArray(ret.price_tiers)) {
+      ret.price_tiers = ret.price_tiers
+        .map((tier) => ({
+          ...tier,
+          price: parseFloat(tier.price.toString()),
+        }))
+        .sort((a, b) => a.quantity - b.quantity);
+    }
     return ret;
   },
 });
@@ -163,6 +188,22 @@ ProductSchema.pre("validate", function (next) {
     if (skus.length !== uniqueSkus.size) {
       return next(
         new Error("Each variant sku must be unique within the product.")
+      );
+    }
+  }
+  if (Array.isArray(this.price_tiers)) {
+    for (const tier of this.price_tiers) {
+      if (!Number.isInteger(tier.quantity) || tier.quantity < 2) {
+        return next(
+          new Error("Each price tier quantity must be an integer of 2 or more.")
+        );
+      }
+    }
+    const quantities = this.price_tiers.map((t) => t.quantity);
+    const uniqueQuantities = new Set(quantities);
+    if (quantities.length !== uniqueQuantities.size) {
+      return next(
+        new Error("Each price tier quantity must be unique within the product.")
       );
     }
   }

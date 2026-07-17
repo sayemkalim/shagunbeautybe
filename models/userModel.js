@@ -3,15 +3,22 @@ const bcrypt = require("bcryptjs");
 
 const UserSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: false }, // Optional for Google OAuth users
+    name: { type: String, required: false },
+    email: {
+      type: String,
+      required: false, // Optional — collected at registration, not required
+      unique: true,
+      sparse: true // Allows multiple users with no email
+    },
     phone: {
       type: String,
-      required: false,
+      required: false, // Not required at the schema level so Google-only users (no phone) still work
       unique: true,
       sparse: true // Allows multiple null values for Google users without phone
     },
+    pin: { type: String, required: false }, // 4-digit login PIN, bcrypt-hashed. Absent = registration not completed yet.
+    pinAttempts: { type: Number, default: 0 },
+    pinAttemptsWindowStart: { type: Date, default: null }, // start of the current 1-hour PIN-attempt window
     // Google OAuth fields
     googleId: { type: String, unique: true, sparse: true },
     authProvider: {
@@ -24,17 +31,17 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Hash password before saving (only for local auth)
+// Hash pin before saving
 UserSchema.pre("save", async function (next) {
-  if (!this.isModified("password") || !this.password) return next();
-  this.password = await bcrypt.hash(this.password, 10);
+  if (!this.isModified("pin") || !this.pin) return next();
+  this.pin = await bcrypt.hash(this.pin, 10);
   next();
 });
 
-// Compare password method
-UserSchema.methods.matchPassword = async function (enteredPassword) {
-  if (!this.password) return false; // Google users don't have passwords
-  return await bcrypt.compare(enteredPassword, this.password);
+// Compare PIN method
+UserSchema.methods.matchPin = async function (enteredPin) {
+  if (!this.pin) return false;
+  return await bcrypt.compare(enteredPin, this.pin);
 };
 
 const User = mongoose.model("User", UserSchema);

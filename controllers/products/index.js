@@ -11,6 +11,50 @@ const {
 const Product = require("../../models/productsModel.js");
 const XLSX = require("xlsx");
 
+// Validates/parses the price_tiers field (bulk pack-size pricing) shared by createProduct and updateProduct.
+const parsePriceTiers = (raw) => {
+  if (raw === undefined || raw === null || raw === "") return { value: undefined };
+
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch (error) {
+      return { error: "Invalid price_tiers format" };
+    }
+  }
+
+  if (!Array.isArray(value)) {
+    return { error: "price_tiers must be an array" };
+  }
+
+  const quantities = new Set();
+  for (const tier of value) {
+    const quantity = Number(tier?.quantity);
+    const price = Number(tier?.price);
+
+    if (!Number.isInteger(quantity) || quantity < 2) {
+      return {
+        error: "Each price tier quantity must be an integer of 2 or more",
+      };
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      return { error: "Each price tier price must be a non-negative number" };
+    }
+    if (quantities.has(quantity)) {
+      return { error: "Each price tier quantity must be unique" };
+    }
+    quantities.add(quantity);
+  }
+
+  return {
+    value: value.map((tier) => ({
+      quantity: Number(tier.quantity),
+      price: Number(tier.price),
+    })),
+  };
+};
+
 const getAllProducts = asyncHandler(async (req, res) => {
   const {
     page = 1,
@@ -207,12 +251,20 @@ const createProduct = asyncHandler(async (req, res) => {
     );
   }
 
+  const priceTiersResult = parsePriceTiers(req.body.price_tiers);
+  if (priceTiersResult.error) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, priceTiersResult.error, false));
+  }
+
   const productData = {
     ...req.body,
     images: imageUrls,
     banner_image: bannerImageUrl,
     meta_data,
     variants,
+    price_tiers: priceTiersResult.value,
   };
 
   if (productData.inventory === undefined) productData.inventory = 0;
@@ -358,12 +410,20 @@ const updateProduct = asyncHandler(async (req, res) => {
     );
   }
 
+  const priceTiersResult = parsePriceTiers(req.body.price_tiers);
+  if (priceTiersResult.error) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, priceTiersResult.error, false));
+  }
+
   const productData = {
     ...req.body,
     images: productImages,
     banner_image: bannerImageUrl,
     meta_data,
     variants,
+    price_tiers: priceTiersResult.value,
   };
 
   if (productData.inventory === undefined)

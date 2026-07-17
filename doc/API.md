@@ -342,7 +342,14 @@ Create a new super-admin. (Note: this is *in addition to* auth-admin's own `/reg
 
 Base path: `/api/auth/user`. Source: `routes/auth/user/index.js`, `controllers/auth/user/index.js`, model `models/userModel.js`.
 
-User schema: `name` (required), `email` (required, unique), `password` (optional — absent for Google users), `phone` (optional, unique, sparse), `googleId` (unique, sparse), `authProvider` (enum `local|google`, default `local`), `profilePicture`.
+User schema: `name` (optional), `email` (optional, unique+sparse), `phone` (optional at the schema level — Google-only users may not have one — unique+sparse), `pin` (optional, bcrypt-hashed 4-digit login PIN; absent means registration was never completed), `pinAttempts` (Number, default 0), `pinAttemptsWindowStart` (Date, default null — start of the current 1-hour PIN-attempt window), `googleId` (unique, sparse), `authProvider` (enum `local|google`, default `local`), `profilePicture`.
+
+**Phone + PIN login/register flow** (replaces the old email/password login — Google OAuth is unaffected and still available via `/google`):
+1. Client calls `POST /login` with just `phoneNumber`. Server looks up the user by phone; if none exists it creates a bare stub record (`{ phone }`, no `pin` yet). Response contains `is_new_user` — `true` if the record has no `pin` set (brand-new phone, or a phone that started but never finished registration), `false` if the account is fully registered.
+2. If `is_new_user: false`, client prompts for the 4-digit PIN and calls `POST /verify-login` with `{ phoneNumber, pin }`. Correct PIN → JWT issued (login complete). Wrong PIN increments a per-user attempt counter; after 10 wrong attempts within a rolling 1-hour window, further attempts are rejected with `429` until the window resets.
+3. If `is_new_user: true`, client collects a PIN the user wants to set (required) plus optional `name`/`email`, and calls `POST /register` with `{ phoneNumber, pin, name?, email? }`. This completes the stub record (or creates one if `/login` wasn't called first) and issues a JWT.
+
+There is no forgot-password/forgot-PIN flow currently — the old `POST /forgot-password` endpoint (email/password-based) was removed along with the `password` field.
 
 ### GET /api/auth/user/
 
@@ -352,45 +359,83 @@ List all users (paginated, searchable). Despite living under `/api/auth/user`, t
 
 **Query params**: `search` (string, optional — matches both `name` AND `email` simultaneously via a single `$and`-style object, so in practice this filter behaves like "name regex AND email regex" rather than OR — likely a bug but documented as coded), `page` (number, optional), `per_page` (number, default 50).
 
-**Success response** `200`: `{ "data": [ { "_id":"...", "name":"...", "email":"...", "phone":"...", "authProvider":"local" } ], "message": "Users fetched successfully" }` (password excluded).
+**Success response** `200`: `{ "data": [ { "_id":"...", "name":"...", "email":"...", "phone":"...", "authProvider":"local" } ], "message": "Users fetched successfully" }` (pin excluded).
 
 **Errors**: `req.admin._id` missing → `{"statusCode":404,"message":"Not authorized"}`.
 
 ---
 
+### POST /api/auth/user/login
+
+Step 1 of the phone+PIN flow. Checks whether `phoneNumber` belongs to a fully-registered user; creates a stub record if the phone has never been seen before.
+
+**Auth**: None.
+
+**Request body**: `{ "phoneNumber": "string (required)" }`
+
+**Success response** `200`:
+```json
+{ "data": { "is_new_user": true }, "message": "New user, please complete registration", "success": true }
+```
+or, for a phone that already has a PIN set:
+```json
+{ "data": { "is_new_user": false }, "message": "Enter your PIN to continue", "success": true }
+```
+
+**Errors**: `400 {"message":"Phone number is required"}`.
+
+**Notable behavior**: If no user exists for `phoneNumber`, a stub `User` document is created immediately with only `phone` set (no `pin`, `name`, or `email`) — this call always persists something on a new number, even though no PIN has been chosen yet. `is_new_user` is `true` whenever the matched/created record has no `pin` (covers both brand-new phones and phones that started registration but never called `/register` to finish it). No token is issued at this step.
+
+---
+
+### POST /api/auth/user/verify-login
+
+Step 2 (existing users, `is_new_user: false` from `/login`). Verifies the 4-digit PIN and logs the user in.
+
+**Auth**: None.
+
+**Request body**: `{ "phoneNumber": "string (required)", "pin": "string, 4 digits (required)" }`
+
+**Success response** `200`: `{ "data": { "id":"...", "name":"...", "email":"...", "phone":"...", "token":"<jwt>" }, "message": "Login successful", "success": true }`
+
+**Errors**:
+- `400 {"message":"Phone number and pin are required"}`
+- `404 {"message":"User not found. Please register first."}` — no user for that phone, or user has no `pin` set yet
+- `401 {"message":"Invalid PIN"}` — wrong PIN (counts against the rate limit below)
+- `429 {"message":"Too many incorrect attempts. Please try again in an hour."}` — 10 wrong attempts already recorded within the current rolling 1-hour window
+
+**Notable behavior**: Tracks `pinAttempts`/`pinAttemptsWindowStart` per user. A wrong-PIN attempt starts (if not already running) a 1-hour window and increments the counter; once the window elapses it resets to 0 automatically on the next attempt. Reaching 10 wrong attempts inside a live window blocks further tries (`429`) until the window expires. A correct PIN resets both fields to their defaults.
+
+---
+
 ### POST /api/auth/user/register
 
-Register a new customer account (email/password).
+Step 2 (new users, `is_new_user: true` from `/login`). Sets the PIN — and optionally `name`/`email` — on the stub record, completing registration.
 
 **Auth**: None.
 
 **Request body**:
 ```json
-{ "name": "string (required)", "email": "string (required)", "phone": "string (required — checked for uniqueness)", "password": "string (required)" }
+{
+  "phoneNumber": "string (required)",
+  "pin": "string, exactly 4 digits (required)",
+  "name": "string (optional)",
+  "email": "string (optional)"
+}
 ```
 
 **Success response** `200` (body `statusCode: 201`):
 ```json
-{ "data": { "id": "...", "name": "...", "email": "...", "token": "<jwt>" }, "message": "New user created successfully", "success": true }
+{ "data": { "id":"...", "name":"...", "email":"...", "phone":"...", "token":"<jwt>" }, "message": "Registration successful", "success": true }
 ```
 
 **Errors**:
-- `400 {"message":"User already exists"}` — email taken.
-- `400 {"message":"Phone number already exists"}` — phone taken.
+- `400 {"message":"Phone number and pin are required"}`
+- `400 {"message":"Pin must be exactly 4 digits"}` — fails `/^\d{4}$/`
+- `400 {"message":"User already registered. Please login."}` — a user already exists for this phone with a `pin` set
+- `400 {"message":"Email already exists"}` — email supplied and already used by another user
 
-**Side effects**: Sends a welcome email asynchronously (`sendWelcomeEmail`, fire-and-forget via `setImmediate`, does not block/affect the response; failures are only logged).
-
----
-
-### POST /api/auth/user/login
-
-Customer login.
-
-**Request body**: `{ "email": "string (required)", "password": "string (required)" }`
-
-**Success response** `200`: `{ "data": { "id":"...", "name":"...", "email":"...", "token":"<jwt>", "phone":"..." }, "message": "User login successful" }`
-
-**Errors**: `401 {"message":"Invalid credentials"}` (no user found, or user has no password i.e. Google-only account, or password mismatch).
+**Notable behavior**: Looks up the stub record created by `/login`; if none exists (client called `/register` directly without `/login` first), creates one. Sends a welcome email asynchronously only if `email` was provided (fire-and-forget via `setImmediate`; failures are only logged, do not affect the response).
 
 ---
 
@@ -423,24 +468,6 @@ Google OAuth login/registration. Verifies a Google ID token server-side and crea
 
 ---
 
-### POST /api/auth/user/forgot-password
-
-Resets the user's password to a new random value and emails it to them (no reset-link/token flow — this is an immediate reset-and-email).
-
-**Auth**: None.
-
-**Request body**: `{ "email": "string (required)" }`
-
-**Success response** `200`: `{ "data": null, "message": "Password reset successful! Check your email for the new password.", "success": true }`
-
-**Errors**:
-- `400 {"message":"Email is required"}`
-- `404 {"message":"User not found with this email"}`
-
-**Notable behavior**: Generates an 8-ish char random password (`crypto.randomBytes(4).toString("hex") + <random uppercase letter> + "!"`), saves it (hashed by the pre-save hook), and asynchronously emails the **plaintext** new password to the user via `sendForgotPasswordEmail` (fire-and-forget, failures only logged).
-
----
-
 ### GET /api/auth/user/:id
 
 Fetch a single user's public profile.
@@ -449,7 +476,7 @@ Fetch a single user's public profile.
 
 **Path params**: `id` (ObjectId, required).
 
-**Success response** `200`: `{ "data": { "_id":"...", "name":"...", "email":"...", "phone":"...", "authProvider":"local" }, "message": "User fetched successfully" }` (password excluded).
+**Success response** `200`: `{ "data": { "_id":"...", "name":"...", "email":"...", "phone":"...", "authProvider":"local" }, "message": "User fetched successfully" }` (pin excluded).
 
 **Errors**: `404 {"message":"User not found"}`.
 
@@ -465,7 +492,7 @@ Update a user's `name`/`email`/`phone`.
 
 **Request body**: `{ "name": "string (optional)", "email": "string (optional)", "phone": "string (optional)" }`
 
-**Success response** `200`: updated user doc (password excluded).
+**Success response** `200`: updated user doc (pin excluded).
 
 **Errors**: `404 {"message":"User not found"}`.
 
@@ -764,7 +791,14 @@ Delete a brand.
 
 Base path: `/api/product`. Source: `routes/product/index.js`, `controllers/products/index.js` (note the directory is `controllers/products`, plural), model `models/productsModel.js`.
 
-Product schema (key fields): `name` (required), `sku` (required, unique), `small_description`, `full_description`, `price` (Decimal128, required), `discounted_price` (Decimal128, nullable, must be ≥0), `tags` ([String] enum: `no_palm_oil, organic, no_gmo, no_aritificial_flavors, vegan, sugar_free, gluten_free, soya_free, no_preservatives, lactose_free, no_flavor_enhancer`), `inventory` (Number, enum `[0,1]`, default 0 — i.e. this is really an in-stock/out-of-stock flag, not a quantity), `status` (enum `published|draft`, default `draft`), `weight_in_grams` (Number, nullable), `manufacturer`, `consumed_type`, `banner_image` (String URL), `images` ([String] URLs), `expiry_date` (Date), `meta_data` (Map), `brand` (ObjectId ref Brand, optional), `is_best_seller`/`is_imported_picks`/`is_bakery`/`celiacFriendly` (Booleans, default false), `sub_category` (ObjectId ref SubCategory, required), `created_by_admin` (ObjectId ref Admin, required), `variants` ([{ sku (required, unique per-product), name, attributes (Map), price (Decimal128, required), discounted_price (Decimal128, nullable), inventory (Number, default 0), images ([String]) }]).
+Product schema (key fields): `name` (required), `sku` (required, unique), `small_description`, `full_description`, `price` (Decimal128, required — this is the MRP), `discounted_price` (Decimal128, nullable, must be ≥0 — the flat qty=1 selling price), `tags` ([String] enum: `no_palm_oil, organic, no_gmo, no_aritificial_flavors, vegan, sugar_free, gluten_free, soya_free, no_preservatives, lactose_free, no_flavor_enhancer`), `inventory` (Number, enum `[0,1]`, default 0 — i.e. this is really an in-stock/out-of-stock flag, not a quantity), `status` (enum `published|draft`, default `draft`), `weight_in_grams` (Number, nullable), `manufacturer`, `consumed_type`, `banner_image` (String URL), `images` ([String] URLs), `expiry_date` (Date), `meta_data` (Map), `brand` (ObjectId ref Brand, optional), `is_best_seller`/`is_imported_picks`/`is_bakery`/`celiacFriendly` (Booleans, default false), `sub_category` (ObjectId ref SubCategory, required), `created_by_admin` (ObjectId ref Admin, required), `variants` ([{ sku (required, unique per-product), name, attributes (Map), price (Decimal128, required), discounted_price (Decimal128, nullable), inventory (Number, default 0), images ([String]) }]), `price_tiers` ([{ quantity (Number, required, integer ≥2, unique per product), price (Decimal128, required, ≥0) }] — bulk/pack-size pricing, base product only, see below).
+
+**Bulk pack-size pricing (`price_tiers`)**: lets an admin define a fixed menu of purchasable quantities with a per-unit price for each, e.g. buy 1 at ₹450 (the normal `discounted_price`), buy 4 at ₹410/unit, buy 10 at ₹360/unit. Source of truth: `utils/pricing/index.js` (`getProductQuantityOptions`, `resolveProductUnitPrice`), used by both the cart (`services/cart/index.js`) and every order-pricing code path (`controllers/order/index.js`).
+- qty=1 is always implicit and priced at `discounted_price` (falling back to `price`/MRP) — `price_tiers` only needs to carry the *additional* pack sizes (quantity ≥ 2).
+- **If a product has no `price_tiers` defined** (the default, and every pre-existing product), quantity is completely unrestricted and priced flat at `discounted_price`/`price` — identical to pre-tiered-pricing behavior. Nothing changes for products that don't opt in.
+- **If a product HAS `price_tiers`**, the customer can only buy quantities that exactly match qty=1 or one of the defined tier quantities (a fixed dropdown/menu on the frontend, not a free-typed number) — cart-add and every order-creation/edit endpoint reject any other quantity with `400`/thrown-error `Invalid quantity <n> for this product. Available quantities: <list>`.
+- Tiers apply to the **base product only** — variant pricing (`variants[].price`/`discounted_price`) is untouched and still accepts any quantity, unaffected by `price_tiers`.
+- `totalAmount`/`total_amount` on orders always reflects `price` (MRP) × quantity regardless of tier (the "savings" baseline); `discountedTotalAmount`/`discounted_total_amount` reflects the resolved tier (or flat) unit price × quantity — this is the amount actually charged.
 
 ### POST /api/product/
 
@@ -794,6 +828,7 @@ Create a product. **Multipart upload** — `multer.any()` (accepts arbitrary fie
   "sub_category": "ObjectId string (required)",
   "meta_data": "JSON string (optional)",
   "variants": "JSON string of variant objects (optional), e.g. '[{\"sku\":\"V1\",\"name\":\"250g\",\"price\":199,\"attributes\":{\"size\":\"250g\"}}]'",
+  "price_tiers": "JSON string of bulk pack-size tiers (optional), e.g. '[{\"quantity\":4,\"price\":410},{\"quantity\":10,\"price\":360}]' — quantity must be a unique integer ≥2, price must be ≥0",
   "is_best_seller": "'true'|'false' (optional)",
   "is_imported_picks": "'true'|'false' (optional)",
   "is_bakery": "'true'|'false' (optional)",
@@ -809,6 +844,7 @@ File fields: `images` (0+ files, product gallery), `banner_image` (0 or 1 file, 
 - Missing/blank `sku` → `400 {"message":"SKU is required and must be a non-empty string"}` (this one DOES use `.status(400)`).
 - Duplicate `sku` → `400 {"message":"SKU must be unique. This SKU already exists."}` (`.status(400)`).
 - Invalid `meta_data`/`variants` JSON → `400 {"message":"Invalid meta_data format"}` / `"Invalid variants format"` (HTTP status stays 200 here, no `.status()` call).
+- Invalid `price_tiers` (malformed JSON, not an array, tier quantity not an integer ≥2, duplicate tier quantities, or negative tier price) → `400` with a specific message, e.g. `{"message":"Each price tier quantity must be an integer of 2 or more"}` (this one DOES use `.status(400)`).
 
 ---
 
@@ -969,11 +1005,11 @@ Update a product. **Multipart upload** — `multer.any()`. Supports keeping exis
 
 **Path params**: `id` (ObjectId, required).
 
-**Request body**: same fields as create, all optional; `images` can be sent as a JSON array of existing URLs to preserve, or new files under the `images` field to add.
+**Request body**: same fields as create, all optional (including `price_tiers`, same JSON-string shape and validation); `images` can be sent as a JSON array of existing URLs to preserve, or new files under the `images` field to add. Omitting `price_tiers` entirely leaves the product's existing tiers unchanged; sending `price_tiers: "[]"` clears them (reverting the product to unrestricted-quantity pricing).
 
 **Success response** `200`: updated product doc.
 
-**Errors**: `404 {"message":"Product not found"}`, `400 {"message":"Invalid meta_data format"}` / `"Invalid variants format"`.
+**Errors**: `404 {"message":"Product not found"}`, `400 {"message":"Invalid meta_data format"}` / `"Invalid variants format"` / price-tier validation messages (same as create, see above).
 
 ---
 
@@ -1088,7 +1124,9 @@ Add/update/remove a line item in the current user's cart (quantity `0` removes t
 - `400 {"message":"Invalid request: type and quantity are required"}`
 - `400 {"message":"Product ID is required for product type"}`
 - `400 {"message":"Bundle ID is required for bundle type"}`
-- Service-layer thrown errors (surfaced as generic 500 via `asyncHandler` since they aren't caught explicitly here): `"Invalid quantity"` (negative), `"Product not found"`, `` `Variant with SKU '...' not found` ``, `"Bundle not found"`, `"Bundle is not available"` (inactive), `"Invalid bundle price"`, `"Invalid type. Must be 'product' or 'bundle'"`.
+- Service-layer thrown errors (surfaced as generic 500 via `asyncHandler` since they aren't caught explicitly here): `"Invalid quantity"` (negative), `"Product not found"`, `` `Variant with SKU '...' not found` ``, `"Bundle not found"`, `"Bundle is not available"` (inactive), `"Invalid bundle price"`, `"Invalid type. Must be 'product' or 'bundle'"`, and — for a `type: "product"` item with no `variant_sku` on a product that has `price_tiers` defined — `` `Invalid quantity <n> for this product. Available quantities: <comma-separated list>` `` if `quantity` doesn't exactly match qty=1 or one of the product's tier quantities.
+
+**Notable behavior — bulk pack-size pricing**: for `type: "product"` without `variant_sku`, the unit price is resolved via `utils/pricing/index.js` (shared with order creation — see the Product section above for the full `price_tiers` model). Products with no `price_tiers` accept any positive integer quantity at the flat `discounted_price`/`price`, unchanged from before this feature existed. Products with `price_tiers` only accept quantities exactly matching qty=1 or one of the defined tiers — anything else is rejected rather than silently priced. `variant_sku` selections are always priced at the variant's own flat price regardless of quantity, untouched by `price_tiers`. Bundles are entirely unaffected by this feature.
 
 ---
 
@@ -1366,6 +1404,8 @@ Base path: `/api/order`. Source: `routes/order/index.js`, `controllers/order/ind
 Order schema (key fields): `orderNumber` (Number, unique, auto-incremented via a `Counter` collection pre-save hook), `user` (ObjectId ref User, nullable for guest orders), `isGuestOrder` (Boolean), `guestInfo` (`{email, name, mobile}`), `items` (array of `{ type: 'product'|'bundle', product: {...snapshot...}, bundle: {...snapshot...}, quantity, total_amount, discounted_total_amount }` — items are **snapshots** of product/bundle data at order time, not live references), `address` (embedded snapshot: `name, mobile, pincode, locality, address, city, state, landmark, alternatePhone, addressType`), `totalAmount`/`discountedTotalAmount`/`shippingCost`/`finalTotalAmount` (Decimal128), `shippingDetails` (`{deliveryZoneId, zoneName, pricingType, isManual, calculatedAt}`), `emailTracking` (`confirmation` + `statusUpdates[]`, each tracking queued/sent/delivered/bounced/failed/opened/clicked state — see Email Tracking module), `status` (enum `pending|confirmed|processing|shipped|delivered|cancelled`, default `pending`), `paymentLink`/`paymentLinkId`/`paymentStatus` (enum `pending|paid|failed|cancelled`)/`paymentId`/`paymentMethod`/`paidAt`.
 
 Two routes reference controller functions (`buyNowOrder`, `generateOrderBill`) that are **commented out** in the router — they are not live endpoints and are omitted below. `handlePaymentWebhook` is exported from this controller but mounted separately under `/api/webhook` (see the [Webhook](#webhook) section) — there is no route for it directly under `/api/order`.
+
+**Bulk pack-size pricing at checkout**: every code path that prices a `type: "product"` order line (cart checkout, guest checkout, customer order edit, admin add/update order items) resolves the per-unit price through the same `utils/pricing/index.js` helpers used by the cart (see the Product and Cart sections above). `totalAmount`/`total_amount` always reflects MRP (`price`) × quantity; `discountedTotalAmount`/`discounted_total_amount` reflects the resolved tier-or-flat unit price × quantity (the amount actually charged). If a product has `price_tiers` and the requested quantity doesn't exactly match qty=1 or one of the defined tiers, the request is rejected with `400 {"message":"Invalid quantity <n> for product \"<name>\". Available quantities: <list>"}` rather than silently mispricing it. Products with no `price_tiers` are unaffected — any positive integer quantity is accepted at the flat price, same as before this feature existed. Cart lines with a `variant_sku` are also unaffected (variant pricing is flat regardless of quantity, ignoring `price_tiers`).
 
 ### GET /api/order/export
 

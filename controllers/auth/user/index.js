@@ -2,9 +2,12 @@ const { asyncHandler } = require("../../../common/asyncHandler");
 const User = require("../../../models/userModel");
 const ApiResponse = require("../../../utils/ApiResponse");
 const { generateAccessToken } = require("../../../utils/auth");
-const { sendWelcomeEmail, sendForgotPasswordEmail } = require("../../../utils/email/directEmailService");
-const crypto = require("crypto");
+const { sendWelcomeEmail } = require("../../../utils/email/directEmailService");
 const { OAuth2Client } = require("google-auth-library");
+
+const PIN_REGEX = /^\d{4}$/;
+const MAX_PIN_ATTEMPTS = 10;
+const PIN_ATTEMPTS_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 const getAllUsers = asyncHandler(async (req, res) => {
   const superAdminId = req.admin._id;
@@ -28,67 +31,174 @@ const getAllUsers = asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(per_page)
-    .select("-password");
+    .select("-pin");
 
   res.json(new ApiResponse(200, users, "Users fetched successfully", true));
 });
 
-const registerUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, password } = req.body;
-  const userExists = await User.findOne({ email });
-  const phoneExists = await User.findOne({ phone });
+/**
+ * Step 1 of login/register: client sends only phoneNumber.
+ * - Existing, fully-registered user (has a pin) -> is_new_user: false, client should call /verify-login next.
+ * - Unknown phone, or a phone with an incomplete signup (no pin yet) -> stub user is created/reused,
+ *   is_new_user: true, client should call /register next.
+ */
+const loginUser = asyncHandler(async (req, res) => {
+  const { phoneNumber } = req.body;
 
-  if (userExists) {
+  if (!phoneNumber) {
     return res
       .status(400)
-      .json(new ApiResponse(400, null, "User already exists", false));
+      .json(new ApiResponse(400, null, "Phone number is required", false));
   }
 
-  if (phoneExists) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Phone number already exists", false));
+  let user = await User.findOne({ phone: phoneNumber });
+  const isNewUser = !user || !user.pin;
+
+  if (!user) {
+    user = await User.create({ phone: phoneNumber });
   }
 
-  const user = await User.create({
-    name,
-    email,
-    phone,
-    password,
-  });
-
-  const accessToken = generateAccessToken(user._id);
-
-  // Send welcome email asynchronously (non-blocking)
-  setImmediate(async () => {
-    try {
-      await sendWelcomeEmail({
-        user: user.toObject(),
-      });
-    } catch (error) {
-      console.error("❌ Failed to send welcome email:", error.message);
-    }
-  });
-
-
-  const data = {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    token: accessToken,
-  };
-
-  res.json(new ApiResponse(201, data, "New user created successfully", true));
+  res.json(
+    new ApiResponse(
+      200,
+      { is_new_user: isNewUser },
+      isNewUser ? "New user, please complete registration" : "Enter your PIN to continue",
+      true
+    )
+  );
 });
 
-const loginUser = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+/**
+ * Step 2 (existing users): verify the 4-digit PIN for a phone that already completed registration.
+ * Rate-limited to MAX_PIN_ATTEMPTS wrong attempts per rolling PIN_ATTEMPTS_WINDOW_MS window.
+ */
+const verifyLogin = asyncHandler(async (req, res) => {
+  const { phoneNumber, pin } = req.body;
 
-  const user = await User.findOne({ email });
-  if (!user || !(await user.matchPassword(password))) {
+  if (!phoneNumber || !pin) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Phone number and pin are required", false));
+  }
+
+  const user = await User.findOne({ phone: phoneNumber });
+
+  if (!user || !user.pin) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "User not found. Please register first.", false));
+  }
+
+  const now = new Date();
+  const windowExpired =
+    !user.pinAttemptsWindowStart ||
+    now - user.pinAttemptsWindowStart > PIN_ATTEMPTS_WINDOW_MS;
+
+  if (windowExpired) {
+    user.pinAttempts = 0;
+    user.pinAttemptsWindowStart = now;
+  }
+
+  if (user.pinAttempts >= MAX_PIN_ATTEMPTS) {
+    return res
+      .status(429)
+      .json(
+        new ApiResponse(
+          429,
+          null,
+          "Too many incorrect attempts. Please try again in an hour.",
+          false
+        )
+      );
+  }
+
+  const isMatch = await user.matchPin(pin);
+
+  if (!isMatch) {
+    user.pinAttempts += 1;
+    await user.save();
     return res
       .status(401)
-      .json(new ApiResponse(401, null, "Invalid credentials", false));
+      .json(new ApiResponse(401, null, "Invalid PIN", false));
+  }
+
+  user.pinAttempts = 0;
+  user.pinAttemptsWindowStart = null;
+  await user.save();
+
+  const accessToken = generateAccessToken(user._id);
+
+  const data = {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    token: accessToken,
+  };
+
+  res.json(new ApiResponse(200, data, "Login successful", true));
+});
+
+/**
+ * Step 2 (new users, called after /login returned is_new_user: true): sets the PIN
+ * (and optional name/email) on the stub user created by /login, completing registration.
+ */
+const registerUser = asyncHandler(async (req, res) => {
+  const { phoneNumber, pin, name, email } = req.body;
+
+  if (!phoneNumber || !pin) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Phone number and pin are required", false));
+  }
+
+  if (!PIN_REGEX.test(pin)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Pin must be exactly 4 digits", false));
+  }
+
+  let user = await User.findOne({ phone: phoneNumber });
+
+  if (user && user.pin) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "User already registered. Please login.", false));
+  }
+
+  if (email) {
+    const emailExists = await User.findOne({
+      email,
+      ...(user && { _id: { $ne: user._id } }),
+    });
+    if (emailExists) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Email already exists", false));
+    }
+  }
+
+  if (!user) {
+    user = new User({ phone: phoneNumber });
+  }
+
+  user.pin = pin;
+  if (name) user.name = name;
+  if (email) user.email = email;
+
+  await user.save();
+
+  if (email) {
+    // Send welcome email asynchronously (non-blocking)
+    setImmediate(async () => {
+      try {
+        await sendWelcomeEmail({
+          user: user.toObject(),
+        });
+      } catch (error) {
+        console.error("❌ Failed to send welcome email:", error.message);
+      }
+    });
   }
 
   const accessToken = generateAccessToken(user._id);
@@ -97,11 +207,11 @@ const loginUser = asyncHandler(async (req, res) => {
     id: user.id,
     name: user.name,
     email: user.email,
-    token: accessToken,
     phone: user.phone,
+    token: accessToken,
   };
 
-  res.json(new ApiResponse(200, data, "User login successful", true));
+  res.json(new ApiResponse(201, data, "Registration successful", true));
 });
 
 const updateUser = asyncHandler(async (req, res) => {
@@ -120,7 +230,7 @@ const updateUser = asyncHandler(async (req, res) => {
   if (phone) user.phone = phone;
 
   await user.save();
-  const updatedUser = await User.findById(id).select("-password");
+  const updatedUser = await User.findById(id).select("-pin");
 
   res.json(
     new ApiResponse(200, updatedUser, "User updated successfully", true)
@@ -145,7 +255,7 @@ const deleteUser = asyncHandler(async (req, res) => {
 const getUserById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const user = await User.findById(id).select("-password");
+  const user = await User.findById(id).select("-pin");
   if (!user) {
     return res
       .status(404)
@@ -153,63 +263,6 @@ const getUserById = asyncHandler(async (req, res) => {
   }
 
   res.json(new ApiResponse(200, user, "User fetched successfully", true));
-});
-
-const forgotPassword = asyncHandler(async (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Email is required", false));
-  }
-
-  // Find user by email
-  const user = await User.findOne({ email });
-
-  if (!user) {
-    return res
-      .status(404)
-      .json(
-        new ApiResponse(404, null, "User not found with this email", false)
-      );
-  }
-
-  // Generate a random secure password (8 characters: alphanumeric + special chars)
-  const newPassword =
-    crypto.randomBytes(4).toString("hex") +
-    String.fromCharCode(65 + Math.floor(Math.random() * 26)) +
-    "!";
-
-  // Update user password (will be hashed by pre-save hook in model)
-  user.password = newPassword;
-  await user.save();
-
-  console.log(`[Forgot Password] Password reset for user: ${user.email}`);
-
-  // Send forgot password email asynchronously (non-blocking)
-  setImmediate(async () => {
-    try {
-      await sendForgotPasswordEmail({
-        user: user.toObject(),
-        newPassword: newPassword, // Send plain password in email (only once)
-      });
-    } catch (error) {
-      console.error("❌ Failed to send forgot password email:", error.message);
-    }
-  });
-
-
-  console.log(`[Forgot Password] Email queued for: ${user.email}`);
-
-  res.json(
-    new ApiResponse(
-      200,
-      null,
-      "Password reset successful! Check your email for the new password.",
-      true
-    )
-  );
 });
 
 /**
@@ -325,9 +378,9 @@ module.exports = {
   getAllUsers,
   registerUser,
   loginUser,
+  verifyLogin,
   updateUser,
   deleteUser,
   getUserById,
-  forgotPassword,
   googleLogin,
 };

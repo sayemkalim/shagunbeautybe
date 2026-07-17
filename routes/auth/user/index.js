@@ -5,8 +5,8 @@ const {
   updateUser,
   deleteUser,
   loginUser,
+  verifyLogin,
   getUserById,
-  forgotPassword,
   googleLogin,
   // logoutUser,
 } = require("../../../controllers/auth/user/index");
@@ -14,10 +14,10 @@ const { superAdmin } = require("../../../middleware/auth/adminMiddleware");
 const router = express.Router();
 
 router.get("/", superAdmin, getAllUsers);
-router.post("/register", registerUser);
-router.post("/login", loginUser);
+router.post("/login", loginUser); // Step 1: phoneNumber -> { is_new_user }
+router.post("/verify-login", verifyLogin); // Step 2 (existing user): phoneNumber + pin -> token
+router.post("/register", registerUser); // Step 2 (new user): phoneNumber + pin + name?/email? -> token
 router.post("/google", googleLogin); // Google OAuth login
-router.post("/forgot-password", forgotPassword);
 router.get("/:id", getUserById);
 router.patch("/:id", updateUser);
 

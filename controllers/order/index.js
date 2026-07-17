@@ -26,6 +26,26 @@ const {
 } = require("../../utils/email/templates/orderConfirmation");
 const Admin = require("../../models/adminModel");
 const razorpay = require("../../config/razorpay");
+const {
+  getProductQuantityOptions,
+  resolveProductUnitPrice,
+} = require("../../utils/pricing/index.js");
+
+// Resolves a product order line's per-unit MRP and per-unit charged price (tier-aware) for a given quantity.
+// Returns { error } if the quantity doesn't match qty=1 or one of the product's defined price tiers.
+const resolveOrderItemUnitPrices = (product, quantity) => {
+  const price = parseFloat(product.price.toString());
+  const discountedPrice = resolveProductUnitPrice(product, quantity);
+  if (discountedPrice === null) {
+    const available = getProductQuantityOptions(product)
+      .map((o) => o.quantity)
+      .join(", ");
+    return {
+      error: `Invalid quantity ${quantity} for product "${product.name}". Available quantities: ${available}`,
+    };
+  }
+  return { price, discountedPrice };
+};
 
 const exportOrders = asyncHandler(async (req, res) => {
   try {
@@ -274,11 +294,14 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           );
       }
 
-      const price = parseFloat(product.price.toString());
-      const discountedPrice = product.discounted_price
-        ? parseFloat(product.discounted_price.toString())
-        : price;
       const quantity = item.quantity || 1;
+      const pricing = resolveOrderItemUnitPrices(product, quantity);
+      if (pricing.error) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, pricing.error, false));
+      }
+      const { price, discountedPrice } = pricing;
       const itemTotal = price * quantity;
       const discountedItemTotal = discountedPrice * quantity;
       totalAmount += itemTotal;
@@ -595,10 +618,24 @@ const createOrder = asyncHandler(async (req, res) => {
     if (cartItem.type === "product") {
       const product = await Product.findById(cartItem.product);
       if (!product) continue;
-      const price = parseFloat(product.price.toString());
-      const discountedPrice = product.discounted_price
-        ? parseFloat(product.discounted_price.toString())
-        : price;
+
+      let price, discountedPrice;
+      if (cartItem.variant_sku) {
+        // Variant pricing is untouched by bulk price tiers (tiers are base-product only)
+        price = parseFloat(product.price.toString());
+        discountedPrice = product.discounted_price
+          ? parseFloat(product.discounted_price.toString())
+          : price;
+      } else {
+        const pricing = resolveOrderItemUnitPrices(product, cartItem.quantity);
+        if (pricing.error) {
+          return res
+            .status(400)
+            .json(new ApiResponse(400, null, pricing.error, false));
+        }
+        ({ price, discountedPrice } = pricing);
+      }
+
       const itemTotal = price * cartItem.quantity;
       const discountedItemTotal = discountedPrice * cartItem.quantity;
       totalAmount += itemTotal;
@@ -1132,10 +1169,24 @@ const editOrder = asyncHandler(async (req, res) => {
       if (item.type === "product") {
         const product = await Product.findById(item.product);
         if (!product) continue;
-        const price = parseFloat(product.price.toString());
-        const discountedPrice = product.discounted_price
-          ? parseFloat(product.discounted_price.toString())
-          : price;
+
+        let price, discountedPrice;
+        if (item.variant_sku) {
+          // Variant pricing is untouched by bulk price tiers (tiers are base-product only)
+          price = parseFloat(product.price.toString());
+          discountedPrice = product.discounted_price
+            ? parseFloat(product.discounted_price.toString())
+            : price;
+        } else {
+          const pricing = resolveOrderItemUnitPrices(product, item.quantity);
+          if (pricing.error) {
+            return res
+              .status(400)
+              .json(new ApiResponse(400, null, pricing.error, false));
+          }
+          ({ price, discountedPrice } = pricing);
+        }
+
         const itemTotal = price * item.quantity;
         const discountedItemTotal = discountedPrice * item.quantity;
         totalAmount += itemTotal;
@@ -1595,10 +1646,13 @@ const updateOrder = asyncHandler(async (req, res) => {
             );
         }
 
-        const price = parseFloat(product.price.toString());
-        const discountedPrice = product.discounted_price
-          ? parseFloat(product.discounted_price.toString())
-          : price;
+        const pricing = resolveOrderItemUnitPrices(product, qty);
+        if (pricing.error) {
+          return res
+            .status(400)
+            .json(new ApiResponse(400, null, pricing.error, false));
+        }
+        const { price, discountedPrice } = pricing;
         const itemTotal = price * qty;
         const discountedItemTotal = discountedPrice * qty;
 
@@ -1682,10 +1736,13 @@ const updateOrder = asyncHandler(async (req, res) => {
               );
           }
 
-          const price = parseFloat(product.price.toString());
-          const discountedPrice = product.discounted_price
-            ? parseFloat(product.discounted_price.toString())
-            : price;
+          const pricing = resolveOrderItemUnitPrices(product, quantity);
+          if (pricing.error) {
+            return res
+              .status(400)
+              .json(new ApiResponse(400, null, pricing.error, false));
+          }
+          const { price, discountedPrice } = pricing;
           const itemTotal = price * quantity;
           const discountedItemTotal = discountedPrice * quantity;
 
