@@ -23,7 +23,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
       <meta http-equiv="X-UA-Compatible" content="IE=edge" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <link href="https://fonts.googleapis.com/css?family=Outfit:ital,wght@0,400;0,500;0,600" rel="stylesheet" />
-      <title>Password Reset - Celic Store</title>
+      <title>Password Reset - Shagun Beauty</title>
       <style>
         html, body { margin: 0 !important; padding: 0 !important; min-height: 100% !important; width: 100% !important; -webkit-font-smoothing: antialiased; }
         * { -ms-text-size-adjust: 100%; }
@@ -51,7 +51,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                               <table width="100%" border="0" cellpadding="0" cellspacing="0">
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 32px 0px;">
-                                    <img src="https://theceliacstore-fe-git-main-madhav-sethis-projects.vercel.app/_next/image?url=%2Fceliac-brand-logo.png&w=384&q=75" width="164" height="41" alt="Celic Store" 
+                                    <img src="https://res.cloudinary.com/dacwig3xk/image/upload/v1784474181/SBL_h4ixmj.png" width="164" height="41" alt="Shagun Beauty" 
                                          style="display: block; width: 164px; height: auto; max-width: 100%; border: 0;" />
                                   </td>
                                 </tr>
@@ -255,7 +255,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                                                   Email Us
                                                 </div>
                                                 <div style="font-size: 14px; line-height: 143%; color: #2a1e19; font-family: 'Outfit', Arial, Helvetica, sans-serif;">
-                                                  theceliacstore@gmail.com
+                                                  info@shagunbeauty.com
                                                 </div>
                                               </td>
                                             </tr>
@@ -314,7 +314,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                               <table width="100%" border="0" cellpadding="0" cellspacing="0">
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 20px 0px;">
-                                    <img src="https://theceliacstore-fe-git-main-madhav-sethis-projects.vercel.app/_next/image?url=%2F193c7e94406b9a9160b8842fcba96582.png&w=384&q=75" width="164" height="41" alt="Celic Store" 
+                                    <img src="https://res.cloudinary.com/dacwig3xk/image/upload/v1784474181/SBL_h4ixmj.png" width="164" height="41" alt="Shagun Beauty" 
                                          style="display: block; width: 164px; height: auto; max-width: 100%; border: 0;" />
                                   </td>
                                 </tr>

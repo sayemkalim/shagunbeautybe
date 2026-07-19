@@ -45,7 +45,7 @@ const sendEmail = async (options) => {
 
     const emailOptions = {
       from: process.env.EMAIL_FROM_EMAIL,
-      fromName: process.env.EMAIL_FROM_NAME || "Celiac Store",
+      fromName: process.env.EMAIL_FROM_NAME || "Shagun Beauty",
       to: Array.isArray(options.to) ? options.to[0] : options.to, // Brevo API handles single recipient
       subject: options.subject,
       html: options.html,

@@ -26,6 +26,7 @@ const {
 } = require("../../utils/email/templates/orderConfirmation");
 const Admin = require("../../models/adminModel");
 const razorpay = require("../../config/razorpay");
+const InventoryService = require("../../services/inventory/index.js");
 const {
   getProductQuantityOptions,
   resolveProductUnitPrice,
@@ -452,6 +453,11 @@ const createGuestOrder = asyncHandler(async (req, res) => {
   });
   await order.save();
 
+  // Deduct inventory asynchronously (non-blocking, best-effort)
+  InventoryService.deductForOrder(order).catch((error) =>
+    console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
+  );
+
   // Mark email as queued initially
   order.emailTracking = {
     confirmation: {
@@ -509,7 +515,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
             guestUser,
           );
           const adminEmailOptions = {
-            to: 'theceliacstore@gmail.com', 
+            to: 'info@shagunbeauty.com', 
             subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
             html: adminHtmlContent,
           };
@@ -558,7 +564,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
             guestUser,
           );
           const adminEmailOptions = {
-            to: 'theceliacstore@gmail.com',
+            to: 'info@shagunbeauty.com',
             subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
             html: adminHtmlContent,
           };
@@ -733,6 +739,11 @@ const createOrder = asyncHandler(async (req, res) => {
   });
   await order.save();
 
+  // Deduct inventory asynchronously (non-blocking, best-effort)
+  InventoryService.deductForOrder(order).catch((error) =>
+    console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
+  );
+
   cart.items = [];
   await cart.save();
 
@@ -790,7 +801,7 @@ const createOrder = asyncHandler(async (req, res) => {
           user.toObject(),
         );
         const adminEmailOptions = {
-          to: "theceliacstore@gmail.com", // Send to first admin (Brevo API handles single recipient)
+          to: "info@shagunbeauty.com", // Send to first admin (Brevo API handles single recipient)
           subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
           html: adminHtmlContent,
         };
@@ -887,6 +898,13 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   const previousStatus = order.status;
   order.status = status;
   await order.save();
+
+  // Restore inventory asynchronously if the order was just cancelled
+  if (previousStatus !== "cancelled" && status === "cancelled") {
+    InventoryService.restoreForCancelledOrder(order).catch((error) =>
+      console.error(`Inventory restore failed for order ${order._id}:`, error.message),
+    );
+  }
 
   // Send status update emails directly (async - won't block response)
   const user = await User.findById(order.user);
@@ -1024,6 +1042,13 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
       });
 
       await order.save();
+
+      // Restore inventory asynchronously if the order was just cancelled
+      if (previousStatus !== "cancelled" && status === "cancelled") {
+        InventoryService.restoreForCancelledOrder(order).catch((error) =>
+          console.error(`Inventory restore failed for order ${order._id}:`, error.message),
+        );
+      }
 
       // Send status update email asynchronously (non-blocking)
       setImmediate(async () => {

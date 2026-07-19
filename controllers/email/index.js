@@ -366,7 +366,7 @@ const sendTestEmail = asyncHandler(async (req, res) => {
   try {
     const testHTML = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #333;">Test Email from Celic Store</h2>
+        <h2 style="color: #333;">Test Email from Shagun Beauty</h2>
         <p>This is a test email to verify email functionality.</p>
         <p>If you received this email, the email system is working correctly.</p>
         <hr style="margin: 20px 0;">
@@ -378,7 +378,7 @@ const sendTestEmail = asyncHandler(async (req, res) => {
 
     const result = await sendCustomEmail({
       to,
-      subject: "Test Email - Celic Store",
+      subject: "Test Email - Shagun Beauty",
       html: testHTML,
     });
 

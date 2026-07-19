@@ -87,7 +87,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
       <link href="https://fonts.googleapis.com/css?family=Outfit:ital,wght@0,400;0,500;0,600" rel="stylesheet" />
-      <title>Order Confirmation - Celic Store</title>
+      <title>Order Confirmation - Shagun Beauty</title>
       <style>
         html, body { margin: 0 !important; padding: 0 !important; min-height: 100% !important; width: 100% !important; -webkit-font-smoothing: antialiased; }
         * { -ms-text-size-adjust: 100%; }
@@ -118,7 +118,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
                                     <table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">
                                       <tr>
                                         <td align="center" valign="top" style="padding: 0px 0px 32px 0px;">
-                                          <img src="https://theceliacstore-fe-git-main-madhav-sethis-projects.vercel.app/_next/image?url=%2F193c7e94406b9a9160b8842fcba96582.png&w=384&q=75" width="164" height="41" alt="Celic Store" 
+                                          <img src="https://res.cloudinary.com/dacwig3xk/image/upload/v1784474181/SBL_h4ixmj.png" width="164" height="41" alt="Shagun Beauty" 
                                                style="display: block; outline: 0; line-height: 100%; -ms-interpolation-mode: bicubic; width: 164px; height: auto; max-width: 100%; border: 0;" />
                                         </td>
                                       </tr>
@@ -372,7 +372,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
                                                   Email Us
                                                 </div>
                                                 <div style="font-size: 14px; line-height: 143%; color: #2a1e19; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: -0.2px;">
-                                                  theceliacstore@gmail.com
+                                                  info@shagunbeauty.com
                                                 </div>
                                               </td>
                                             </tr>
@@ -437,7 +437,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
                                             <tr>
                                               <td>
                                                 <div style="font-size: 15px; line-height: 143%; color: #585858; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: 0px;">
-                                                  Feel free to reach out to us at <strong style="color: #1a110c;">theceliacstore@gmail.com</strong>
+                                                  Feel free to reach out to us at <strong style="color: #1a110c;">info@shagunbeauty.com</strong>
                                                   <br/>We open opportunities for all forms of business collaboration
                                                 </div>
                                               </td>
@@ -472,7 +472,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
                               <table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 20px 0px;">
-                                    <img src="https://theceliacstore-fe-git-main-madhav-sethis-projects.vercel.app/_next/image?url=%2F193c7e94406b9a9160b8842fcba96582.png&w=384&q=75" width="164" height="41" alt="Celic Store" 
+                                    <img src="https://res.cloudinary.com/dacwig3xk/image/upload/v1784474181/SBL_h4ixmj.png" width="164" height="41" alt="Shagun Beauty" 
                                          style="display: block; outline: 0; line-height: 100%; width: 164px; height: auto; max-width: 100%; border: 0;" />
                                   </td>
                                 </tr>
@@ -575,7 +575,7 @@ const generateCompanyOrderNotification = (order, user) => {
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>New Order Alert - Celic Store Admin</title>
+      <title>New Order Alert - Shagun Beauty Admin</title>
     </head>
     <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color: #f3f4f6; padding: 40px 0;">
@@ -817,7 +817,7 @@ const generateCompanyOrderNotification = (order, user) => {
               <tr>
                 <td style="background-color: #f9fafb; padding: 24px 32px; text-align: center; border-top: 1px solid #e5e7eb;">
                   <p style="margin: 0; color: #6b7280; font-size: 12px;">
-                    This is an automated notification from Celic Store Admin System
+                    This is an automated notification from Shagun Beauty Admin System
                   </p>
                   <p style="margin: 12px 0 0 0; color: #9ca3af; font-size: 11px;">
                     Sent at ${new Date().toLocaleString()} • Order Management System
@@ -915,7 +915,7 @@ const generateCustomerOrderUpdate = (order, user) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
       <link href="https://fonts.googleapis.com/css?family=Outfit:ital,wght@0,400;0,500;0,600" rel="stylesheet" />
-      <title>Order Updated - Celic Store</title>
+      <title>Order Updated - Shagun Beauty</title>
       <style>
         html, body { margin: 0 !important; padding: 0 !important; min-height: 100% !important; width: 100% !important; -webkit-font-smoothing: antialiased; }
         * { -ms-text-size-adjust: 100%; }
@@ -946,7 +946,7 @@ const generateCustomerOrderUpdate = (order, user) => {
                                     <table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">
                                       <tr>
                                         <td align="center" valign="top" style="padding: 0px 0px 32px 0px;">
-                                          <img src="https://theceliacstore-fe-git-main-madhav-sethis-projects.vercel.app/_next/image?url=%2F193c7e94406b9a9160b8842fcba96582.png&w=384&q=75" width="164" height="41" alt="Celic Store" 
+                                          <img src="https://res.cloudinary.com/dacwig3xk/image/upload/v1784474181/SBL_h4ixmj.png" width="164" height="41" alt="Shagun Beauty" 
                                                style="display: block; outline: 0; line-height: 100%; -ms-interpolation-mode: bicubic; width: 164px; height: auto; max-width: 100%; border: 0;" />
                                         </td>
                                       </tr>
@@ -1189,7 +1189,7 @@ const generateCustomerOrderUpdate = (order, user) => {
                                                   Email Us
                                                 </div>
                                                 <div style="font-size: 14px; line-height: 143%; color: #2a1e19; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: -0.2px;">
-                                                  theceliacstore@gmail.com
+                                                  info@shagunbeauty.com
                                                 </div>
                                               </td>
                                             </tr>
@@ -1254,7 +1254,7 @@ const generateCustomerOrderUpdate = (order, user) => {
                                             <tr>
                                               <td>
                                                 <div style="font-size: 15px; line-height: 143%; color: #585858; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: 0px;">
-                                                  Feel free to reach out to us at <strong style="color: #1a110c;">theceliacstore@gmail.com</strong>
+                                                  Feel free to reach out to us at <strong style="color: #1a110c;">info@shagunbeauty.com</strong>
                                                   <br/>We open opportunities for all forms of business collaboration
                                                 </div>
                                               </td>
@@ -1289,7 +1289,7 @@ const generateCustomerOrderUpdate = (order, user) => {
                               <table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 20px 0px;">
-                                    <img src="https://theceliacstore-fe-git-main-madhav-sethis-projects.vercel.app/_next/image?url=%2F193c7e94406b9a9160b8842fcba96582.png&w=384&q=75" width="164" height="41" alt="Celic Store" 
+                                    <img src="https://res.cloudinary.com/dacwig3xk/image/upload/v1784474181/SBL_h4ixmj.png" width="164" height="41" alt="Shagun Beauty" 
                                          style="display: block; outline: 0; line-height: 100%; width: 164px; height: auto; max-width: 100%; border: 0;" />
                                   </td>
                                 </tr>
@@ -1386,7 +1386,7 @@ const generateCompanyOrderUpdate = (order, user) => {
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Order Updated Alert - Celic Store Admin</title>
+      <title>Order Updated Alert - Shagun Beauty Admin</title>
     </head>
     <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color: #f3f4f6; padding: 40px 0;">
@@ -1628,7 +1628,7 @@ const generateCompanyOrderUpdate = (order, user) => {
               <tr>
                 <td style="background-color: #f9fafb; padding: 24px 32px; text-align: center; border-top: 1px solid #e5e7eb;">
                   <p style="margin: 0; color: #6b7280; font-size: 12px;">
-                    This is an automated notification from Celic Store Admin System
+                    This is an automated notification from Shagun Beauty Admin System
                   </p>
                   <p style="margin: 12px 0 0 0; color: #9ca3af; font-size: 11px;">
                     Sent at ${new Date().toLocaleString()} • Order Management System

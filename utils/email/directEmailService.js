@@ -252,7 +252,7 @@ async function sendWelcomeEmail(data) {
       
       const result = await sendEmail({
         to: user.email,
-        subject: `Welcome to Celiac Store! 🎉`,
+        subject: `Welcome to Shagun Beauty! 🎉`,
         html: welcomeHTML,
       });
 
@@ -288,7 +288,7 @@ async function sendForgotPasswordEmail(data) {
       
       const result = await sendEmail({
         to: user.email,
-        subject: `Password Reset - Celic Store 🔐`,
+        subject: `Password Reset - Shagun Beauty 🔐`,
         html: forgotPasswordHTML,
       });
 

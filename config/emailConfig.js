@@ -9,7 +9,7 @@ const emailConfig = {
     pass: process.env.EMAIL_PASSWORD,
   },
   from: {
-    name: process.env.EMAIL_FROM_NAME || "Celiac Store",
+    name: process.env.EMAIL_FROM_NAME || "Shagun Beauty",
     email: process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER,
   },
 };

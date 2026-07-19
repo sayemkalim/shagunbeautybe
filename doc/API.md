@@ -1452,7 +1452,7 @@ Place an order from the authenticated user's cart + a saved address; clears the 
 
 **Errors**: `400 {"message":"Invalid cart or address ID"}`, `400 {"message":"Cart not found or empty"}`, `400 {"message":"Address not found"}`.
 
-**Notable behavior**: Snapshots each cart item (product/bundle) and the address into the order. Computes shipping via `calculateShippingCost(pincode, totalWeightGrams)`; `finalTotalAmount = discountedTotalAmount + shippingCost`. Clears the user's cart (`items = []`) after order creation. No inventory/stock decrement occurs anywhere. Sends customer-confirmation + admin-notification emails **asynchronously after the response is sent** (fire-and-forget IIFE) — admin email is hardcoded to `theceliacstore@gmail.com`.
+**Notable behavior**: Snapshots each cart item (product/bundle) and the address into the order. Computes shipping via `calculateShippingCost(pincode, totalWeightGrams)`; `finalTotalAmount = discountedTotalAmount + shippingCost`. Clears the user's cart (`items = []`) after order creation. No inventory/stock decrement occurs anywhere. Sends customer-confirmation + admin-notification emails **asynchronously after the response is sent** (fire-and-forget IIFE) — admin email is hardcoded to `info@shagunbeauty.com`.
 
 ---
 
@@ -1483,7 +1483,7 @@ Place a guest (unauthenticated) order directly from a client-supplied items arra
 
 **Errors** (all `400`): `"Items array is required and cannot be empty"`, `"Address with name, mobile, pincode, city, and state is required"`, `` `Invalid product_id: <id>` ``, `` `Product not found: <id>` ``, `` `Invalid bundle_id: <id>` ``, `` `Bundle not found: <id>` ``, `` `Invalid item type: <type>. Must be 'product' or 'bundle'` ``, `"No valid items found"`.
 
-**Notable behavior**: Same shipping/total computation as `POST /api/order/`. If `address.email` is provided, sends a customer confirmation email async; always sends an admin notification email async (hardcoded `theceliacstore@gmail.com`) regardless of whether a customer email was available.
+**Notable behavior**: Same shipping/total computation as `POST /api/order/`. If `address.email` is provided, sends a customer confirmation email async; always sends an admin notification email async (hardcoded `info@shagunbeauty.com`) regardless of whether a customer email was available.
 
 ---
 

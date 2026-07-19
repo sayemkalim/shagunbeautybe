@@ -15,7 +15,7 @@ exports.sendEmail = async (emailOptions) => {
   try {
     const sendSmtpEmail = {
       sender: {
-        name: emailOptions.fromName || "Celic Store",
+        name: emailOptions.fromName || "Shagun Beauty",
         email: emailOptions.from || process.env.EMAIL_FROM_EMAIL,
       },
       to: [{ email: emailOptions.to }],
