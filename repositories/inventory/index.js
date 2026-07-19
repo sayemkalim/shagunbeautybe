@@ -183,15 +183,18 @@ const getStatsAggregation = async () => {
     },
   ]);
 
-  return (
-    result[0] || {
+  if (!result[0]) {
+    return {
       total_skus_tracked: 0,
       total_units_in_stock: 0,
       total_stock_value: 0,
       low_stock_count: 0,
       out_of_stock_count: 0,
-    }
-  );
+    };
+  }
+
+  const { _id, ...stats } = result[0];
+  return stats;
 };
 
 module.exports = {
