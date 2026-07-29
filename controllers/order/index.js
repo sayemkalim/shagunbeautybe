@@ -222,7 +222,7 @@ const getAllOrders = asyncHandler(async (req, res) => {
 });
 
 const createGuestOrder = asyncHandler(async (req, res) => {
-  const { items, address } = req.body;
+  const { items, address, paymentMode } = req.body;
 
   // Validate items
   if (!items || !Array.isArray(items) || items.length === 0) {
@@ -235,6 +235,14 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           "Items array is required and cannot be empty",
           false,
         ),
+      );
+  }
+
+  if (!["COD", "UPI"].includes(paymentMode)) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(400, null, "paymentMode must be 'COD' or 'UPI'", false),
       );
   }
 
@@ -450,6 +458,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
     shippingCost,
     shippingDetails,
     finalTotalAmount,
+    paymentMode,
     status: "pending",
   });
   await order.save();
@@ -593,7 +602,13 @@ const createGuestOrder = asyncHandler(async (req, res) => {
 
 const createOrder = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { cartId, addressId, couponCode } = req.body;
+  const { cartId, addressId, couponCode, paymentMode } = req.body;
+
+  if (!["COD", "UPI"].includes(paymentMode)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "paymentMode must be 'COD' or 'UPI'", false));
+  }
 
   if (
     !mongoose.Types.ObjectId.isValid(cartId) ||
@@ -759,6 +774,7 @@ const createOrder = asyncHandler(async (req, res) => {
     couponCode: couponResult ? couponResult.coupon.code : null,
     couponDiscountAmount,
     finalTotalAmount,
+    paymentMode,
     status: "pending",
   });
   await order.save();
