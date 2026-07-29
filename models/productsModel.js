@@ -66,6 +66,11 @@ const ProductSchema = new mongoose.Schema(
       min: 0,
       default: null,
     },
+    color: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     manufacturer: {
       type: String,
     },
@@ -130,6 +135,8 @@ const ProductSchema = new mongoose.Schema(
         },
         inventory: { type: Number, default: 0, min: 0 },
         images: [String],
+        color: { type: String, trim: true, default: null },
+        weight_in_grams: { type: Number, min: 0, default: null },
       },
     ],
     // Bulk/pack-size pricing for the base product (not available on variants).
