@@ -131,6 +131,13 @@ const deleteCoupon = asyncHandler(async (req, res) => {
   res.json(new ApiResponse(200, null, "Coupon deleted successfully", true));
 });
 
+// User-facing: list coupons the current user can still redeem
+const getActiveCoupons = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const coupons = await CouponService.getActiveCouponsForUser(userId);
+  res.json(new ApiResponse(200, coupons, "Active coupons fetched successfully", true));
+});
+
 // User-facing: validate a coupon against the current order total without redeeming it.
 const validateCoupon = asyncHandler(async (req, res) => {
   const { code, order_total } = req.body;
@@ -174,5 +181,6 @@ module.exports = {
   createCoupon,
   updateCoupon,
   deleteCoupon,
+  getActiveCoupons,
   validateCoupon,
 };

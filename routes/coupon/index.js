@@ -6,7 +6,8 @@ const {
 } = require("../../middleware/auth/adminMiddleware.js");
 const router = express.Router();
 
-// User-facing
+// User-facing (must stay above "/:id" below, or "/active" gets swallowed as an id)
+router.get("/active", user, CouponController.getActiveCoupons);
 router.post("/validate", user, CouponController.validateCoupon);
 
 // Admin management

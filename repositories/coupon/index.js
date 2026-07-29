@@ -39,6 +39,24 @@ const getCouponByCode = async (code) => {
   return await Coupon.findOne({ code: code.trim().toUpperCase() });
 };
 
+// Active + currently within their validity window + not yet exhausted overall
+const getActiveCoupons = async () => {
+  const now = new Date();
+  return await Coupon.find({
+    is_active: true,
+    valid_from: { $lte: now },
+    $and: [
+      { $or: [{ valid_until: null }, { valid_until: { $gte: now } }] },
+      {
+        $or: [
+          { usage_limit_total: null },
+          { $expr: { $lt: ["$used_count", "$usage_limit_total"] } },
+        ],
+      },
+    ],
+  }).sort({ createdAt: -1 });
+};
+
 const createCoupon = async (data) => {
   return await Coupon.create(data);
 };
@@ -91,6 +109,7 @@ module.exports = {
   countAllCoupons,
   getCouponById,
   getCouponByCode,
+  getActiveCoupons,
   createCoupon,
   updateCoupon,
   deleteCoupon,

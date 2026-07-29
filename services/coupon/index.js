@@ -28,6 +28,29 @@ const getCouponById = async (id) => {
   return await CouponRepository.getCouponById(id);
 };
 
+// User-facing: currently redeemable coupons, excluding ones this user has already used up
+const getActiveCouponsForUser = async (userId) => {
+  const coupons = await CouponRepository.getActiveCoupons();
+
+  const result = [];
+  for (const coupon of coupons) {
+    const userUsageCount = await CouponRepository.countUsageByUser(coupon._id, userId);
+    if (userUsageCount >= coupon.usage_limit_per_user) continue;
+
+    result.push({
+      code: coupon.code,
+      description: coupon.description,
+      discount_type: coupon.discount_type,
+      discount_value: coupon.discount_value,
+      max_discount_amount: coupon.max_discount_amount,
+      min_order_value: coupon.min_order_value,
+      valid_until: coupon.valid_until,
+    });
+  }
+
+  return result;
+};
+
 const createCoupon = async (data) => {
   if (data.code) {
     data.code = data.code.trim().toUpperCase();
@@ -170,6 +193,7 @@ const releaseCouponUsage = async (orderId) => {
 module.exports = {
   getAllCoupons,
   getCouponById,
+  getActiveCouponsForUser,
   createCoupon,
   updateCoupon,
   deleteCoupon,
