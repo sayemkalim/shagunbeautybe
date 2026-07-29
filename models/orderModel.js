@@ -114,6 +114,19 @@ const OrderSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Decimal128,
     default: 0
   },
+  coupon: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Coupon",
+    default: null
+  },
+  couponCode: {
+    type: String,
+    default: null
+  },
+  couponDiscountAmount: {
+    type: mongoose.Schema.Types.Decimal128,
+    default: 0
+  },
   shippingDetails: {
     deliveryZoneId: mongoose.Schema.Types.ObjectId,
     zoneName: String,
@@ -232,6 +245,9 @@ OrderSchema.set("toJSON", {
     }
     if (ret.shippingCost) {
       ret.shippingCost = parseFloat(ret.shippingCost.toString());
+    }
+    if (ret.couponDiscountAmount) {
+      ret.couponDiscountAmount = parseFloat(ret.couponDiscountAmount.toString());
     }
     if (ret.finalTotalAmount) {
       ret.finalTotalAmount = parseFloat(ret.finalTotalAmount.toString());

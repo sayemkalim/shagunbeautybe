@@ -27,6 +27,7 @@ const {
 const Admin = require("../../models/adminModel");
 const razorpay = require("../../config/razorpay");
 const InventoryService = require("../../services/inventory/index.js");
+const CouponService = require("../../services/coupon/index.js");
 const {
   getProductQuantityOptions,
   resolveProductUnitPrice,
@@ -592,7 +593,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
 
 const createOrder = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { cartId, addressId } = req.body;
+  const { cartId, addressId, couponCode } = req.body;
 
   if (
     !mongoose.Types.ObjectId.isValid(cartId) ||
@@ -716,6 +717,25 @@ const createOrder = asyncHandler(async (req, res) => {
   delete addressSnapshot.updatedAt;
   delete addressSnapshot.__v;
 
+  // Validate and apply coupon against the discounted item total (pre-shipping)
+  let couponResult = null;
+  let couponDiscountAmount = 0;
+  if (couponCode) {
+    couponResult = await CouponService.validateCoupon({
+      code: couponCode,
+      userId,
+      orderTotal: discountedTotalAmount,
+    });
+
+    if (!couponResult.success) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, couponResult.message, false));
+    }
+
+    couponDiscountAmount = couponResult.discount_amount;
+  }
+
   // Calculate shipping cost based on pincode and total weight
   // This creates a snapshot of the shipping cost at order time
   const { shippingCost, shippingDetails } = await calculateShippingCost(
@@ -723,8 +743,9 @@ const createOrder = asyncHandler(async (req, res) => {
     totalWeightGrams,
   );
 
-  // Calculate final total amount (discounted total + shipping)
-  const finalTotalAmount = discountedTotalAmount + shippingCost;
+  // Calculate final total amount (discounted total - coupon discount + shipping)
+  const finalTotalAmount =
+    discountedTotalAmount - couponDiscountAmount + shippingCost;
 
   const order = new Order({
     user: userId,
@@ -734,10 +755,26 @@ const createOrder = asyncHandler(async (req, res) => {
     discountedTotalAmount,
     shippingCost,
     shippingDetails,
+    coupon: couponResult ? couponResult.coupon._id : null,
+    couponCode: couponResult ? couponResult.coupon.code : null,
+    couponDiscountAmount,
     finalTotalAmount,
     status: "pending",
   });
   await order.save();
+
+  // Record coupon redemption (non-blocking best-effort, mirrors inventory deduction)
+  if (couponResult) {
+    CouponService.applyCouponUsage({
+      couponId: couponResult.coupon._id,
+      userId,
+      orderId: order._id,
+      discountAmount: couponDiscountAmount,
+      orderTotal: discountedTotalAmount,
+    }).catch((error) =>
+      console.error(`Coupon usage recording failed for order ${order._id}:`, error.message),
+    );
+  }
 
   // Deduct inventory asynchronously (non-blocking, best-effort)
   InventoryService.deductForOrder(order).catch((error) =>
@@ -904,6 +941,9 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     InventoryService.restoreForCancelledOrder(order).catch((error) =>
       console.error(`Inventory restore failed for order ${order._id}:`, error.message),
     );
+    CouponService.releaseCouponUsage(order._id).catch((error) =>
+      console.error(`Coupon usage release failed for order ${order._id}:`, error.message),
+    );
   }
 
   // Send status update emails directly (async - won't block response)
@@ -1047,6 +1087,9 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
       if (previousStatus !== "cancelled" && status === "cancelled") {
         InventoryService.restoreForCancelledOrder(order).catch((error) =>
           console.error(`Inventory restore failed for order ${order._id}:`, error.message),
+        );
+        CouponService.releaseCouponUsage(order._id).catch((error) =>
+          console.error(`Coupon usage release failed for order ${order._id}:`, error.message),
         );
       }
 

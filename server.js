@@ -29,6 +29,7 @@ const emailTrackingRoutes = require("./routes/email_tracking/index.js");
 const emailRoutes = require("./routes/email/index.js");
 const webhookRoutes = require("./routes/webhook/index.js");
 const inventoryRoutes = require("./routes/inventory/index.js");
+const couponRoutes = require("./routes/coupon/index.js");
 
 // Connect DB
 connectDB();
@@ -69,6 +70,7 @@ app.use("/api/email-tracking", emailTrackingRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/inventory", inventoryRoutes);
+app.use("/api/coupon", couponRoutes);
 
 app.use("/api-doc", swaggerUI.serve, swaggerUI.setup(swaggerSpec));
 
