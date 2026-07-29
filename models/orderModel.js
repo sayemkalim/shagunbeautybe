@@ -195,11 +195,14 @@ const OrderSchema = new mongoose.Schema({
     enum: ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"],
     default: "pending"
   },
-  // Payment mode the customer chose at checkout — COD or prepaid via UPI
+  // Payment mode the customer chose at checkout — COD or prepaid via UPI.
+  // Not schema-required: full-document validation reruns on every save (including
+  // unrelated admin updates to older orders), so enforcement lives in the
+  // createOrder/createGuestOrder controllers instead of here.
   paymentMode: {
     type: String,
     enum: ["COD", "UPI"],
-    required: true
+    default: null
   },
   paymentLink: {
     type: String,
