@@ -229,6 +229,17 @@ const OrderSchema = new mongoose.Schema({
   paidAt: {
     type: Date,
     default: null
+  },
+  // Set once the order's invoice PDF has been generated (on first transition
+  // to "confirmed"). Presence of billUrl is the idempotency check — never
+  // regenerate once set.
+  billUrl: {
+    type: String,
+    default: null
+  },
+  billGeneratedAt: {
+    type: Date,
+    default: null
   }
 }, { timestamps: true });
 

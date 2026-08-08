@@ -32,6 +32,49 @@ const {
   getProductQuantityOptions,
   resolveProductUnitPrice,
 } = require("../../utils/pricing/index.js");
+const os = require("os");
+const path = require("path");
+const fs = require("fs/promises");
+const { uploadPDF } = require("../../utils/upload");
+const { buildOrderBillPdfBuffer } = require("../../utils/pdf/orderBill.js");
+
+// Idempotently generates + uploads the order's invoice PDF (skipped if
+// order.billUrl is already set) and persists the resulting URL on the order.
+// Safe to call any time an order's status becomes "confirmed" or later.
+const ensureOrderBillGenerated = async (order) => {
+  if (order.billUrl) return order;
+
+  let customer;
+  if (order.isGuestOrder) {
+    customer = {
+      name: order.guestInfo?.name,
+      email: order.guestInfo?.email,
+      mobile: order.guestInfo?.mobile,
+    };
+  } else {
+    const billedUser = await User.findById(order.user).select("name email phone");
+    customer = {
+      name: billedUser?.name,
+      email: billedUser?.email,
+      mobile: billedUser?.phone,
+    };
+  }
+
+  const buffer = await buildOrderBillPdfBuffer({
+    order: order.toObject(),
+    customer,
+  });
+
+  const tempFilePath = path.join(os.tmpdir(), `invoice-${order._id}-${Date.now()}.pdf`);
+  await fs.writeFile(tempFilePath, buffer);
+  const url = await uploadPDF(tempFilePath, "invoices");
+
+  order.billUrl = url;
+  order.billGeneratedAt = new Date();
+  await order.save();
+
+  return order;
+};
 
 // Resolves a product order line's per-unit MRP and per-unit charged price (tier-aware) for a given quantity.
 // Returns { error } if the quantity doesn't match qty=1 or one of the product's defined price tiers.
@@ -962,6 +1005,17 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     );
   }
 
+  // Generate the invoice the first time an order is confirmed (no-op if it
+  // already exists). Awaited so it's ready immediately for /bill, but
+  // failure here must not block the status update itself.
+  if (status === "confirmed") {
+    try {
+      await ensureOrderBillGenerated(order);
+    } catch (error) {
+      console.error(`Bill generation failed for order ${order._id}:`, error.message);
+    }
+  }
+
   // Send status update emails directly (async - won't block response)
   const user = await User.findById(order.user);
 
@@ -1109,6 +1163,16 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
         );
       }
 
+      // Generate the invoice the first time an order is confirmed (no-op if
+      // it already exists).
+      if (status === "confirmed") {
+        try {
+          await ensureOrderBillGenerated(order);
+        } catch (error) {
+          console.error(`Bill generation failed for order ${order._id}:`, error.message);
+        }
+      }
+
       // Send status update email asynchronously (non-blocking)
       setImmediate(async () => {
         try {
@@ -1183,6 +1247,65 @@ const getOrderById = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, order, "Order fetched successfully", true));
+});
+
+// Admin-only: returns the invoice PDF URL for an order so the admin FE can
+// download/open it. Generates it on demand as a fallback if it's somehow
+// missing for an order that has already been confirmed (idempotent - never
+// regenerates once billUrl is set).
+const getOrderBill = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.billUrl) {
+    if (order.status === "pending") {
+      return res
+        .status(404)
+        .json(
+          new ApiResponse(
+            404,
+            null,
+            "Bill is only generated once the order is confirmed",
+            false,
+          ),
+        );
+    }
+
+    try {
+      await ensureOrderBillGenerated(order);
+    } catch (error) {
+      console.error(`Bill generation failed for order ${order._id}:`, error.message);
+      return res
+        .status(500)
+        .json(new ApiResponse(500, null, "Failed to generate bill", false));
+    }
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        order_id: order._id,
+        order_number: order.orderNumber,
+        bill_url: order.billUrl,
+        filename: `invoice-${order.orderNumber || order._id}.pdf`,
+        generated_at: order.billGeneratedAt,
+      },
+      "Bill fetched successfully",
+      true,
+    ),
+  );
 });
 
 const getOrderByIdFormUser = asyncHandler(async (req, res) => {
@@ -1402,6 +1525,89 @@ const editOrder = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, order, "Order updated successfully", true));
+});
+
+// User-initiated cancellation of their own order. Only allowed while the
+// order hasn't shipped yet. Mirrors the admin status-update flow (inventory
+// restore, coupon usage release, status-update email) but scoped to the
+// order's owner and restricted to cancellable statuses.
+const cancelOrder = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findOne({ _id: id, user: userId });
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  const cancellableStatuses = ["pending", "confirmed", "processing"];
+  if (!cancellableStatuses.includes(order.status)) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          order.status === "cancelled"
+            ? "Order is already cancelled"
+            : `Order cannot be cancelled once it is ${order.status}`,
+          false,
+        ),
+      );
+  }
+
+  const previousStatus = order.status;
+  order.status = "cancelled";
+
+  if (!order.emailTracking) {
+    order.emailTracking = { confirmation: {}, statusUpdates: [] };
+  }
+  order.emailTracking.statusUpdates.push({
+    status: order.status,
+    emailStatus: "queued",
+    queuedAt: new Date(),
+    attempts: 0,
+  });
+
+  await order.save();
+
+  InventoryService.restoreForCancelledOrder(order).catch((error) =>
+    console.error(`Inventory restore failed for order ${order._id}:`, error.message),
+  );
+  CouponService.releaseCouponUsage(order._id).catch((error) =>
+    console.error(`Coupon usage release failed for order ${order._id}:`, error.message),
+  );
+
+  setImmediate(async () => {
+    try {
+      const user = await User.findById(order.user);
+      if (user) {
+        await sendStatusUpdateEmails({
+          order: order.toObject(),
+          user: user.toObject(),
+          previousStatus,
+          updatedBy: null,
+        });
+      }
+    } catch (error) {
+      console.error(
+        `❌ Failed to send cancellation email for order ${order._id}:`,
+        error.message,
+      );
+    }
+  });
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, order, "Order cancelled successfully", true));
 });
 
 const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
@@ -2168,6 +2374,16 @@ const updateOrder = asyncHandler(async (req, res) => {
 
     await order.save();
 
+    // Generate the invoice the first time an order is confirmed (no-op if
+    // it already exists).
+    if (order.status === "confirmed") {
+      try {
+        await ensureOrderBillGenerated(order);
+      } catch (error) {
+        console.error(`Bill generation failed for order ${order._id}:`, error.message);
+      }
+    }
+
     (async () => {
       try {
         // Send customer email
@@ -2742,7 +2958,9 @@ module.exports = {
   updateOrderStatus,
   bulkUpdateOrderStatus,
   getOrderById,
+  getOrderBill,
   editOrder,
+  cancelOrder,
   getProductsWithOrderCounts,
   getOrdersByProductId,
   getOrderByIdFormUser,

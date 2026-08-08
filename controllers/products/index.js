@@ -9,7 +9,102 @@ const {
   migrateImagesToCloudinary,
 } = require("../../utils/upload/index.js");
 const Product = require("../../models/productsModel.js");
+const Inventory = require("../../models/inventoryModel.js");
+const InventoryService = require("../../services/inventory/index.js");
+const {
+  loadTakenSkus,
+  generateUniqueVariantSku,
+} = require("../../utils/variantSku.js");
 const XLSX = require("xlsx");
+
+// Resolves each variant's images: keeps existing http(s) URLs as-is, uploads
+// any newly attached files (field name `variants[<idx>][images]`), and drops
+// anything else. Shared by createProduct, updateProduct and bulkReplaceVariants.
+const resolveVariantImages = async (variants, files) => {
+  return Promise.all(
+    variants.map(async (variant, idx) => {
+      let variantImages = [];
+      if (variant.images) {
+        let vImgs = variant.images;
+        if (typeof vImgs === "string") {
+          try {
+            vImgs = JSON.parse(vImgs);
+          } catch {
+            vImgs = [vImgs];
+          }
+        }
+        variantImages = await Promise.all(
+          vImgs.map(async (img) => {
+            if (img && typeof img === "object" && img.path) {
+              return await uploadSingleFile(img.path, "uploads/images");
+            } else if (typeof img === "string" && img.startsWith("http")) {
+              return img;
+            } else {
+              const file = files.find(
+                (f) =>
+                  f.fieldname === `variants[${idx}][images]` &&
+                  f.originalname === img
+              );
+              if (file) {
+                return await uploadSingleFile(file.path, "uploads/images");
+              }
+            }
+            return null;
+          })
+        );
+        variantImages = variantImages.filter(Boolean);
+      } else {
+        const variantImageFiles = files.filter(
+          (f) => f.fieldname === `variants[${idx}][images]`
+        );
+        variantImages =
+          variantImageFiles.length > 0
+            ? await uploadMultipleFiles(variantImageFiles, "uploads/images")
+            : variant.images || [];
+      }
+      return { ...variant, images: variantImages };
+    })
+  );
+};
+
+// Generates skus for any variant missing one, mutating the array in place.
+// takenSkus is a Set (from loadTakenSkus) shared across the whole request so
+// siblings don't collide with each other either.
+const assignMissingVariantSkus = (variants, baseSku, takenSkus) => {
+  for (const variant of variants) {
+    if (!variant.sku || !String(variant.sku).trim()) {
+      variant.sku = generateUniqueVariantSku(baseSku, variant, takenSkus);
+    }
+  }
+};
+
+// Best-effort: ensures an Inventory row exists for the base product and each
+// variant sku, so stock is trackable immediately without a manual /sync call.
+// Never throws — mirrors the best-effort pattern used for order-driven
+// inventory adjustments in services/inventory/index.js.
+const ensureInventoryForProduct = async (product, adminId) => {
+  try {
+    await InventoryService.ensureInventoryRecord({
+      productId: product._id,
+      variantSku: null,
+      sku: product.sku,
+      adminId,
+    });
+    for (const variant of product.variants || []) {
+      await InventoryService.ensureInventoryRecord({
+        productId: product._id,
+        variantSku: variant.sku,
+        sku: variant.sku,
+        adminId,
+      });
+    }
+  } catch (error) {
+    console.error(
+      `Inventory sync failed for product ${product._id}:`,
+      error.message
+    );
+  }
+};
 
 // Validates/parses the price_tiers field (bulk pack-size pricing) shared by createProduct and updateProduct.
 const parsePriceTiers = (raw) => {
@@ -233,22 +328,9 @@ const createProduct = asyncHandler(async (req, res) => {
   }
 
   if (Array.isArray(variants)) {
-    variants = await Promise.all(
-      variants.map(async (variant, idx) => {
-        const variantImageFiles = files.filter(
-          (f) => f.fieldname === `variants[${idx}][images]`
-        );
-        if (variantImageFiles.length) {
-          variant.images = await uploadMultipleFiles(
-            variantImageFiles,
-            "uploads/images"
-          );
-        } else {
-          variant.images = [];
-        }
-        return variant;
-      })
-    );
+    variants = await resolveVariantImages(variants, files);
+    const takenSkus = await loadTakenSkus();
+    assignMissingVariantSkus(variants, req.body.sku.trim(), takenSkus);
   }
 
   const priceTiersResult = parsePriceTiers(req.body.price_tiers);
@@ -270,6 +352,7 @@ const createProduct = asyncHandler(async (req, res) => {
   if (productData.inventory === undefined) productData.inventory = 0;
 
   const product = await ProductsServices.createProduct(productData);
+  await ensureInventoryForProduct(product, req.admin._id);
   res.json(new ApiResponse(201, product, "Product created successfully", true));
 });
 
@@ -362,52 +445,9 @@ const updateProduct = asyncHandler(async (req, res) => {
 
   // For each variant, keep URLs, upload only new files
   if (Array.isArray(variants)) {
-    variants = await Promise.all(
-      variants.map(async (variant, idx) => {
-        let variantImages = [];
-        if (variant.images) {
-          let vImgs = variant.images;
-          if (typeof vImgs === "string") {
-            try {
-              vImgs = JSON.parse(vImgs);
-            } catch {
-              vImgs = [vImgs];
-            }
-          }
-          variantImages = await Promise.all(
-            vImgs.map(async (img, vIdx) => {
-              if (img && typeof img === "object" && img.path) {
-                return await uploadSingleFile(img.path, "uploads/images");
-              } else if (typeof img === "string" && img.startsWith("http")) {
-                return img;
-              } else {
-                // Check if a file was uploaded for this variant image
-                const file = files.find(
-                  (f) =>
-                    f.fieldname === `variants[${idx}][images]` &&
-                    f.originalname === img
-                );
-                if (file) {
-                  return await uploadSingleFile(file.path, "uploads/images");
-                }
-              }
-              return null;
-            })
-          );
-          variantImages = variantImages.filter(Boolean);
-        } else {
-          // If no images in body, check for uploaded files
-          const variantImageFiles = files.filter(
-            (f) => f.fieldname === `variants[${idx}][images]`
-          );
-          variantImages =
-            variantImageFiles.length > 0
-              ? await uploadMultipleFiles(variantImageFiles, "uploads/images")
-              : variant.images || [];
-        }
-        return { ...variant, images: variantImages };
-      })
-    );
+    variants = await resolveVariantImages(variants, files);
+    const takenSkus = await loadTakenSkus();
+    assignMissingVariantSkus(variants, product.sku, takenSkus);
   }
 
   const priceTiersResult = parsePriceTiers(req.body.price_tiers);
@@ -430,6 +470,7 @@ const updateProduct = asyncHandler(async (req, res) => {
     productData.inventory = product.inventory || 0;
 
   const updatedProduct = await ProductsServices.updateProduct(id, productData);
+  await ensureInventoryForProduct(updatedProduct, req.admin._id);
 
   res.json(
     new ApiResponse(200, updatedProduct, "Product updated successfully", true)
@@ -443,6 +484,166 @@ const deleteProduct = asyncHandler(async (req, res) => {
   }
 
   res.json(new ApiResponse(200, null, "Product deleted successfully", true));
+});
+
+// Previews a generated variant sku without persisting anything. Body accepts
+// `attributes` (object) and/or `color` / `weight_in_grams`, same shape used
+// on a variant when creating/updating a product.
+const generateVariantSkuPreview = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json(new ApiResponse(400, null, "Invalid product ID", false));
+  }
+
+  const product = await Product.findById(id).select("sku");
+  if (!product) {
+    return res.json(new ApiResponse(404, null, "Product not found", false));
+  }
+
+  const { attributes, color, weight_in_grams } = req.body;
+  const takenSkus = await loadTakenSkus();
+  const sku = generateUniqueVariantSku(
+    product.sku,
+    { attributes, color, weight_in_grams },
+    takenSkus
+  );
+
+  res.json(new ApiResponse(200, { sku }, "SKU generated successfully", true));
+});
+
+// Replaces a product's entire variants array in one call: variants omitted
+// from the payload are removed, variants without a sku are treated as new
+// and auto-assigned one, everything else is upserted as given. Uses
+// document.save() (not findByIdAndUpdate) so schema validators and the
+// duplicate-sku pre("validate") hook actually run.
+const bulkReplaceVariants = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json(new ApiResponse(400, null, "Invalid product ID", false));
+  }
+
+  const product = await Product.findById(id);
+  if (!product) {
+    return res.json(new ApiResponse(404, null, "Product not found", false));
+  }
+
+  let { variants } = req.body;
+  if (typeof variants === "string") {
+    try {
+      variants = JSON.parse(variants);
+    } catch (error) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Invalid variants format", false));
+    }
+  }
+  if (!Array.isArray(variants)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "variants must be an array", false));
+  }
+
+  const files = req.files || [];
+  variants = await resolveVariantImages(variants, files);
+
+  const takenSkus = await loadTakenSkus();
+  assignMissingVariantSkus(variants, product.sku, takenSkus);
+
+  product.variants = variants;
+
+  try {
+    await product.save();
+  } catch (error) {
+    return res.status(400).json(new ApiResponse(400, null, error.message, false));
+  }
+
+  await ensureInventoryForProduct(product, req.admin._id);
+
+  res.json(new ApiResponse(200, product, "Variants updated successfully", true));
+});
+
+// Removes a single variant by sku. Inventory/movement history for that sku
+// is left in place (not deleted) for audit purposes, same as bulkReplaceVariants.
+const deleteVariant = asyncHandler(async (req, res) => {
+  const { id, sku } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json(new ApiResponse(400, null, "Invalid product ID", false));
+  }
+
+  const product = await Product.findById(id);
+  if (!product) {
+    return res.json(new ApiResponse(404, null, "Product not found", false));
+  }
+
+  const variantIndex = product.variants.findIndex((v) => v.sku === sku);
+  if (variantIndex === -1) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, `Variant with sku "${sku}" not found`, false));
+  }
+
+  product.variants.splice(variantIndex, 1);
+
+  try {
+    await product.save();
+  } catch (error) {
+    return res.status(400).json(new ApiResponse(400, null, error.message, false));
+  }
+
+  res.json(new ApiResponse(200, product, "Variant deleted successfully", true));
+});
+
+// Joins the live Inventory ledger onto a product's base sku + each variant
+// sku, so an admin panel can show current stock per variant without a
+// separate round trip per sku to /api/inventory/:sku.
+const getVariantsInventory = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json(new ApiResponse(400, null, "Invalid product ID", false));
+  }
+
+  const product = await Product.findById(id).select("sku variants").lean();
+  if (!product) {
+    return res.json(new ApiResponse(404, null, "Product not found", false));
+  }
+
+  const inventoryRecords = await Inventory.find({ product: id }).lean();
+  const bySku = new Map(inventoryRecords.map((record) => [record.variant_sku, record]));
+
+  const toStockInfo = (record) =>
+    record
+      ? {
+          quantity_on_hand: record.quantity_on_hand,
+          reserved_quantity: record.reserved_quantity,
+          low_stock_threshold: record.low_stock_threshold,
+          last_restocked_at: record.last_restocked_at,
+          tracked: true,
+        }
+      : {
+          quantity_on_hand: 0,
+          reserved_quantity: 0,
+          low_stock_threshold: 0,
+          last_restocked_at: null,
+          tracked: false,
+        };
+
+  const base = { sku: product.sku, ...toStockInfo(bySku.get(null)) };
+  const variants = (product.variants || []).map((variant) => ({
+    sku: variant.sku,
+    name: variant.name,
+    color: variant.color,
+    attributes: variant.attributes,
+    ...toStockInfo(bySku.get(variant.sku)),
+  }));
+
+  res.json(
+    new ApiResponse(
+      200,
+      { product_id: product._id, sku: product.sku, base, variants },
+      "Variant inventory fetched successfully",
+      true
+    )
+  );
 });
 
 const getProductRecommendations = asyncHandler(async (req, res) => {
@@ -1297,6 +1498,10 @@ module.exports = {
   createProduct,
   updateProduct,
   deleteProduct,
+  generateVariantSkuPreview,
+  bulkReplaceVariants,
+  deleteVariant,
+  getVariantsInventory,
   getProductRecommendations,
   checkProductPurchased,
   getProductsByAdmin,

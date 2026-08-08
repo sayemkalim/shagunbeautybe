@@ -2,7 +2,11 @@ const express = require("express");
 const ProductController = require("../../controllers/products/index.js");
 const multer = require("multer");
 const { storage } = require("../../config/multer.js");
-const { admin, adminOrSuperAdmin } = require("../../middleware/auth/adminMiddleware.js");
+const {
+  admin,
+  adminOrSuperAdmin,
+  adminOrSubAdminOrSuperAdmin,
+} = require("../../middleware/auth/adminMiddleware.js");
 const { user } = require("../../middleware/auth/userMiddleware.js");
 const router = express.Router();
 
@@ -22,6 +26,11 @@ router.post("/migrate-images/:id", adminOrSuperAdmin, ProductController.migrateP
 router.get("/:id", ProductController.getProductById);
 router.put("/:id", adminOrSuperAdmin, upload.any(), ProductController.updateProduct);
 router.delete("/:id", adminOrSuperAdmin, ProductController.deleteProduct);
+
+router.get("/:id/variants/inventory", adminOrSubAdminOrSuperAdmin, ProductController.getVariantsInventory);
+router.post("/:id/variants/generate-sku", adminOrSuperAdmin, ProductController.generateVariantSkuPreview);
+router.put("/:id/variants", adminOrSuperAdmin, upload.any(), ProductController.bulkReplaceVariants);
+router.delete("/:id/variants/:sku", adminOrSuperAdmin, ProductController.deleteVariant);
 router.post("/bulk", adminOrSuperAdmin, ProductController.bulkCreateProducts);
 router.patch("/bulk-update", adminOrSuperAdmin, ProductController.bulkUpdateProducts);
 
