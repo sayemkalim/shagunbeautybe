@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const PDFDocument = require("pdfkit");
+const QRCode = require("qrcode");
 const { toNumber } = require("../email/emailHelpers");
 
 const BRAND_GREEN = "#039133";
@@ -14,12 +15,15 @@ const LOGO_PATH = path.join(
   "..",
   "public",
   "email-assets",
-  "celiac-brand-logo.png"
+  "shagun-beauty-logo.png"
 );
 
-const COMPANY_NAME = process.env.COMPANY_NAME || "The Celiac Store";
-const COMPANY_ADDRESS = process.env.COMPANY_ADDRESS || "";
-const COMPANY_GSTIN = process.env.COMPANY_GSTIN || "";
+const COMPANY_NAME = process.env.COMPANY_NAME || "Shagun Beauty";
+const COMPANY_ADDRESS =
+  process.env.COMPANY_ADDRESS || "Pachraya, Etawah (U.P.)- 206001";
+const COMPANY_GSTIN = process.env.COMPANY_GSTIN || "09FCCPS7816H1Z4";
+const COMPANY_PHONE = process.env.COMPANY_PHONE || "+91 70170 24329";
+const COMPANY_UPI_ID = process.env.COMPANY_UPI_ID || "9045791373-3@ybl";
 const COMPANY_SUPPORT_EMAIL =
   process.env.COMPANY_SUPPORT_EMAIL || process.env.EMAIL_FROM_EMAIL || "";
 
@@ -65,7 +69,18 @@ const ensureSpace = (doc, y, needed) => {
 // the raw PDF buffer. `customer` = { name, email, mobile } — resolved by the
 // caller (from the User doc for registered orders, or guestInfo for guests)
 // so this stays a pure function with no DB access.
-const buildOrderBillPdfBuffer = ({ order, customer }) => {
+const buildOrderBillPdfBuffer = async ({ order, customer }) => {
+  // Static (no amount) UPI payment QR — identical across every invoice, so
+  // it's generated fresh per PDF rather than cached as a file.
+  const upiUri = `upi://pay?pa=${encodeURIComponent(COMPANY_UPI_ID)}&pn=${encodeURIComponent(
+    COMPANY_NAME
+  )}&cu=INR`;
+  const qrCodeBuffer = await QRCode.toBuffer(upiUri, {
+    type: "png",
+    width: 150,
+    margin: 1,
+  });
+
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN });
@@ -79,14 +94,14 @@ const buildOrderBillPdfBuffer = ({ order, customer }) => {
       let logoDrawn = false;
       if (fs.existsSync(LOGO_PATH)) {
         try {
-          doc.image(LOGO_PATH, PAGE_MARGIN, headerTop, { width: 60 });
+          doc.image(LOGO_PATH, PAGE_MARGIN, headerTop, { width: 90 });
           logoDrawn = true;
         } catch (_) {
           // Fall back to text-only header if the logo can't be read/decoded.
         }
       }
 
-      const companyBlockX = logoDrawn ? PAGE_MARGIN + 70 : PAGE_MARGIN;
+      const companyBlockX = logoDrawn ? PAGE_MARGIN + 100 : PAGE_MARGIN;
       doc
         .fillColor(TEXT_DARK)
         .font("Helvetica-Bold")
@@ -107,6 +122,14 @@ const buildOrderBillPdfBuffer = ({ order, customer }) => {
           .fontSize(9)
           .fillColor(TEXT_MUTED)
           .text(`GSTIN: ${COMPANY_GSTIN}`, companyBlockX, companyInfoY);
+        companyInfoY = doc.y + 2;
+      }
+      if (COMPANY_PHONE) {
+        doc
+          .font("Helvetica")
+          .fontSize(9)
+          .fillColor(TEXT_MUTED)
+          .text(`Phone: ${COMPANY_PHONE}`, companyBlockX, companyInfoY);
       }
 
       doc
@@ -241,8 +264,9 @@ const buildOrderBillPdfBuffer = ({ order, customer }) => {
       y += 8;
       addSummaryLine("Grand Total", formatCurrency(grandTotal), { bold: true });
 
-      // ---- Payment details ----
-      y = ensureSpace(doc, y + 16, 60);
+      // ---- Payment details + UPI QR ----
+      y = ensureSpace(doc, y + 16, 110);
+      const paymentBlockTop = y;
       doc.font("Helvetica-Bold").fontSize(10).fillColor(TEXT_DARK).text("Payment Details", PAGE_MARGIN, y);
       y = doc.y + 4;
       doc
@@ -251,6 +275,25 @@ const buildOrderBillPdfBuffer = ({ order, customer }) => {
         .fillColor(TEXT_MUTED)
         .text(`Mode: ${order.paymentMode || "-"}`, PAGE_MARGIN, y)
         .text(`Status: ${String(order.paymentStatus || "-").toUpperCase()}`, PAGE_MARGIN, doc.y + 2);
+
+      const qrSize = 70;
+      const captionWidth = 110;
+      const captionX = PAGE_MARGIN + PAGE_WIDTH - captionWidth;
+      const qrX = captionX + (captionWidth - qrSize) / 2;
+      doc.image(qrCodeBuffer, qrX, paymentBlockTop, { width: qrSize, height: qrSize });
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .fillColor(TEXT_DARK)
+        .text("Scan & Pay via UPI", captionX, paymentBlockTop + qrSize + 4, {
+          width: captionWidth,
+          align: "center",
+        });
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor(TEXT_MUTED)
+        .text(COMPANY_UPI_ID, captionX, doc.y + 1, { width: captionWidth, align: "center" });
 
       // ---- Footer ----
       const footerText = `Thank you for shopping with ${COMPANY_NAME}!${
