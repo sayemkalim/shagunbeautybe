@@ -9,6 +9,7 @@ const {
   migrateImagesToCloudinary,
 } = require("../../utils/upload/index.js");
 const Product = require("../../models/productsModel.js");
+const Inventory = require("../../models/inventoryModel.js");
 const XLSX = require("xlsx");
 
 // Validates/parses the price_tiers field (bulk pack-size pricing) shared by createProduct and updateProduct.
@@ -180,7 +181,17 @@ const getProductById = asyncHandler(async (req, res) => {
     return res.json(new ApiResponse(404, null, "Product not found", false));
   }
 
-  res.json(new ApiResponse(200, product, "Product fetched successfully", true));
+  const inventoryRecord = await Inventory.findOne({
+    product: id,
+    variant_sku: null,
+  }).lean();
+  const available_inventory = inventoryRecord
+    ? Math.max(inventoryRecord.quantity_on_hand - inventoryRecord.reserved_quantity, 0)
+    : 0;
+
+  const productData = { ...product.toJSON(), available_inventory };
+
+  res.json(new ApiResponse(200, productData, "Product fetched successfully", true));
 });
 
 const createProduct = asyncHandler(async (req, res) => {
