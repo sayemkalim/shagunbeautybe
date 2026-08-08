@@ -1,13 +1,5 @@
 const mongoose = require("mongoose");
 
-const HEX_COLOR_REGEX = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
-const validateHexColor = {
-  validator: function (value) {
-    return value === null || value === undefined || HEX_COLOR_REGEX.test(value);
-  },
-  message: (props) => `${props.value} is not a valid hex color (e.g. #FF0000)`,
-};
-
 const ProductSchema = new mongoose.Schema(
   {
     name: {
@@ -78,7 +70,6 @@ const ProductSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-      validate: validateHexColor,
     },
     manufacturer: {
       type: String,
@@ -144,7 +135,7 @@ const ProductSchema = new mongoose.Schema(
         },
         inventory: { type: Number, default: 0, min: 0 },
         images: [String],
-        color: { type: String, trim: true, default: null, validate: validateHexColor },
+        color: { type: String, trim: true, default: null },
         weight_in_grams: { type: Number, min: 0, default: null },
       },
     ],
