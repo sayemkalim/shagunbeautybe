@@ -445,6 +445,36 @@ const deleteProduct = asyncHandler(async (req, res) => {
   res.json(new ApiResponse(200, null, "Product deleted successfully", true));
 });
 
+// Removes a single variant by sku, leaving the rest of the product untouched.
+const deleteVariant = asyncHandler(async (req, res) => {
+  const { id, sku } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.json(new ApiResponse(400, null, "Invalid product ID", false));
+  }
+
+  const product = await Product.findById(id);
+  if (!product) {
+    return res.json(new ApiResponse(404, null, "Product not found", false));
+  }
+
+  const variantIndex = product.variants.findIndex((v) => v.sku === sku);
+  if (variantIndex === -1) {
+    return res.json(
+      new ApiResponse(404, null, `Variant with sku "${sku}" not found`, false)
+    );
+  }
+
+  product.variants.splice(variantIndex, 1);
+
+  try {
+    await product.save();
+  } catch (error) {
+    return res.json(new ApiResponse(400, null, error.message, false));
+  }
+
+  res.json(new ApiResponse(200, product, "Variant deleted successfully", true));
+});
+
 const getProductRecommendations = asyncHandler(async (req, res) => {
   const { product_id, page = 1, per_page = 10 } = req.query;
 
@@ -1297,6 +1327,7 @@ module.exports = {
   createProduct,
   updateProduct,
   deleteProduct,
+  deleteVariant,
   getProductRecommendations,
   checkProductPurchased,
   getProductsByAdmin,

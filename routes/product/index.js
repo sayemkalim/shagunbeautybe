@@ -22,6 +22,7 @@ router.post("/migrate-images/:id", adminOrSuperAdmin, ProductController.migrateP
 router.get("/:id", ProductController.getProductById);
 router.put("/:id", adminOrSuperAdmin, upload.any(), ProductController.updateProduct);
 router.delete("/:id", adminOrSuperAdmin, ProductController.deleteProduct);
+router.delete("/:id/variants/:sku", adminOrSuperAdmin, ProductController.deleteVariant);
 router.post("/bulk", adminOrSuperAdmin, ProductController.bulkCreateProducts);
 router.patch("/bulk-update", adminOrSuperAdmin, ProductController.bulkUpdateProducts);
 
