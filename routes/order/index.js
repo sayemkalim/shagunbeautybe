@@ -21,9 +21,9 @@ router.get("/:id/email-status", adminOrSuperAdmin, OrderController.getOrderEmail
 router.patch("/:id", adminOrSuperAdmin, OrderController.updateOrder);
 router.patch("/:id/status", adminOrSuperAdmin, OrderController.updateOrderStatus);
 router.patch("/edit/:id", user, OrderController.editOrder);
-router.patch("/:id/cancel", user, OrderController.cancelOrder);
+router.patch("/payment/:id/cancel", user, OrderController.cancelOrder);
 router.get("/:id", adminOrSuperAdmin, OrderController.getOrderById);
-router.get("/:id/bill", adminOrSuperAdmin, OrderController.getOrderBill);
+router.get("/payment/:id/bill", adminOrSuperAdmin, OrderController.getOrderBill);
 router.get("/user/:id", user, OrderController.getOrderByIdFormUser);
 // router.get("/generate-order-bill/:id", user, OrderController.generateOrderBill);
 router.post("/generate-payment-link", adminOrSuperAdmin, OrderController.generatePaymentLinks);
