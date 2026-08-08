@@ -1238,7 +1238,7 @@ const getOrderById = asyncHandler(async (req, res) => {
       .status(400)
       .json(new ApiResponse(400, null, "Invalid order ID", false));
   }
-  const order = await Order.findById(id);
+  const order = await Order.findById(id).populate("coupon");
   if (!order) {
     return res
       .status(404)
