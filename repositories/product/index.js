@@ -323,7 +323,10 @@ const createProduct = async (data) => {
 };
 
 const updateProduct = async (id, data) => {
-  return await Product.findByIdAndUpdate(id, data, { new: true });
+  return await Product.findByIdAndUpdate(id, data, {
+    new: true,
+    runValidators: true,
+  });
 };
 
 const deleteProduct = async (id) => {

@@ -429,7 +429,12 @@ const updateProduct = asyncHandler(async (req, res) => {
   if (productData.inventory === undefined)
     productData.inventory = product.inventory || 0;
 
-  const updatedProduct = await ProductsServices.updateProduct(id, productData);
+  let updatedProduct;
+  try {
+    updatedProduct = await ProductsServices.updateProduct(id, productData);
+  } catch (error) {
+    return res.status(400).json(new ApiResponse(400, null, error.message, false));
+  }
 
   res.json(
     new ApiResponse(200, updatedProduct, "Product updated successfully", true)
@@ -467,7 +472,12 @@ const deleteVariant = asyncHandler(async (req, res) => {
   product.variants.splice(variantIndex, 1);
 
   try {
-    await product.save();
+    // Only validate paths this endpoint actually touches (variants) — some
+    // older products have legacy data in unrelated fields (e.g. a base
+    // `inventory` value outside its current 0/1 enum, written before that
+    // constraint existed via findByIdAndUpdate, which skips validation) that
+    // would otherwise fail a full-document save unrelated to this change.
+    await product.save({ validateModifiedOnly: true });
   } catch (error) {
     return res.json(new ApiResponse(400, null, error.message, false));
   }
