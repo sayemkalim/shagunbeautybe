@@ -1,88 +1,23 @@
 const { asyncHandler } = require("../../common/asyncHandler.js");
 const ApiResponse = require("../../utils/ApiResponse.js");
 const CartService = require("../../services/cart/index.js");
-const DeliveryZoneService = require("../../services/delivery_zone/index.js");
 const CouponService = require("../../services/coupon/index.js");
-const Address = require("../../models/addressModel.js");
-const Product = require("../../models/productsModel.js");
-const Bundle = require("../../models/bundleModel.js");
+const { calculateShippingCost } = require("../../utils/shipping/calculateShipping.js");
 
 const getCart = asyncHandler(async (req, res) => {
   const user_id = req.user?._id;
-  const { addressId: address_id, couponCode: coupon_code } = req.query;
+  const { couponCode: coupon_code } = req.query;
 
   const cart = await CartService.getCart({ user_id });
 
-  let shippingCharge = 0;
-
-  // Calculate shipping charge if user is logged in and cart exists
-  if (user_id && cart && cart.items && cart.items.length > 0) {
-    let selectedAddress = null;
-
-    // If address_id is provided, use that address
-    if (address_id) {
-      selectedAddress = await Address.findOne({
-        _id: address_id,
-        user: user_id,
-      });
-    } else {
-      // Otherwise, use primary address
-      selectedAddress = await Address.findOne({
-        user: user_id,
-        isPrimary: true,
-      });
-    }
-
-    if (selectedAddress && selectedAddress.pincode) {
-      // Calculate total weight of all items in cart
-      let totalWeight = 0;
-
-      for (const item of cart.items) {
-  let itemWeight = 0;
-
-  try {
-    if (item.type === "product" && item.product) {
-      const product = await Product.findById(item.product)
-        .select("weight_in_grams")
-        .lean();
-      itemWeight = product?.weight_in_grams || 0;
-    } else if (item.type === "bundle" && item.bundle) {
-      const bundle = await Bundle.findById(item.bundle)
-        .populate({ path: "products.product", select: "weight_in_grams" })
-        .lean();
-      if (bundle?.products && Array.isArray(bundle.products)) {
-        itemWeight = bundle.products.reduce((sum, bundleProduct) => {
-          const productWeight = bundleProduct.product?.weight_in_grams || 0;
-          const productQty = bundleProduct.quantity || 1;
-          return sum + productWeight * productQty;
-        }, 0);
-      }
-    }
-  } catch (weightError) {
-    // If weight lookup fails for any item, skip it — shipping will fall back to 0
-    console.error("Weight lookup failed for item:", item._id, weightError.message);
-    itemWeight = 0;
-  }
-
-  totalWeight += itemWeight * (item.quantity || 1);
-}
-
-      // Calculate shipping charge if total weight is available
-      if (totalWeight > 0) {
-        const deliveryPriceResult =
-          await DeliveryZoneService.calculateDeliveryPrice(
-            selectedAddress.pincode,
-            totalWeight
-          );
-
-        if (deliveryPriceResult.success) {
-          shippingCharge = deliveryPriceResult.delivery_price || 0;
-        }
-      }
-    }
-  }
-
   const cartTotalPrice = cart?.total_price || 0;
+
+  // Orders under ₹2000 incur a flat ₹50 shipping charge
+  let shippingCharge = 0;
+  if (cart && cart.items && cart.items.length > 0) {
+    const { shippingCost } = await calculateShippingCost(cartTotalPrice);
+    shippingCharge = shippingCost;
+  }
 
   // Validate coupon (if provided) against the cart's item total, before shipping
   let couponInfo = null;

@@ -477,10 +477,9 @@ const createGuestOrder = asyncHandler(async (req, res) => {
     addressType: address.addressType || "home",
   };
 
-  // Calculate shipping cost based on pincode and total weight
+  // Orders under ₹2000 incur a flat ₹50 shipping charge
   const { shippingCost, shippingDetails } = await calculateShippingCost(
-    address.pincode,
-    totalWeightGrams,
+    discountedTotalAmount,
   );
 
   // Calculate final total amount (discounted total + shipping)
@@ -794,11 +793,10 @@ const createOrder = asyncHandler(async (req, res) => {
     couponDiscountAmount = couponResult.discount_amount;
   }
 
-  // Calculate shipping cost based on pincode and total weight
+  // Orders under ₹2000 incur a flat ₹50 shipping charge.
   // This creates a snapshot of the shipping cost at order time
   const { shippingCost, shippingDetails } = await calculateShippingCost(
-    address.pincode,
-    totalWeightGrams,
+    discountedTotalAmount,
   );
 
   // Calculate final total amount (discounted total - coupon discount + shipping)
@@ -1494,12 +1492,10 @@ const editOrder = asyncHandler(async (req, res) => {
 
   order.address = addressSnapshot;
 
-  // Recalculate shipping if address or items changed
+  // Recalculate shipping if address or items changed (orders under ₹2000 incur a flat ₹50 shipping charge)
   if (newAddress || orderItems.length > 0) {
-    const pincode = newAddress ? newAddress.pincode : order.address.pincode;
     const { shippingCost, shippingDetails } = await calculateShippingCost(
-      pincode,
-      totalWeightGrams,
+      discountedTotalAmount,
     );
     order.shippingCost = shippingCost;
     order.shippingDetails = shippingDetails;
@@ -2319,34 +2315,9 @@ const updateOrder = asyncHandler(async (req, res) => {
       updateData.addProducts ||
       updateData.addBundles
     ) {
-      let totalWeightGrams = 0;
-
-      // Calculate total weight from current order items
-      for (const item of order.items) {
-        if (item.type === "product" && item.product) {
-          const product = await Product.findById(item.product._id);
-          if (product && product.weight_in_grams) {
-            totalWeightGrams += product.weight_in_grams * item.quantity;
-          }
-        } else if (item.type === "bundle" && item.bundle) {
-          const bundle = await Bundle.findById(item.bundle._id);
-          if (bundle && bundle.products && Array.isArray(bundle.products)) {
-            for (const bundleProduct of bundle.products) {
-              const product = await Product.findById(bundleProduct.product);
-              if (product && product.weight_in_grams) {
-                totalWeightGrams +=
-                  product.weight_in_grams *
-                  bundleProduct.quantity *
-                  item.quantity;
-              }
-            }
-          }
-        }
-      }
-
-      // Recalculate shipping based on new weight and/or address
-      const pincode = order.address.pincode;
-      const result = await calculateShippingCost(pincode, totalWeightGrams);
+      // Orders under ₹2000 incur a flat ₹50 shipping charge
+      const discountedTotal = parseFloat(order.discountedTotalAmount.toString());
+      const result = await calculateShippingCost(discountedTotal);
 
       newShippingCost = result.shippingCost;
       newShippingDetails = result.shippingDetails;
