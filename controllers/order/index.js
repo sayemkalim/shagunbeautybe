@@ -265,7 +265,7 @@ const getAllOrders = asyncHandler(async (req, res) => {
 });
 
 const createGuestOrder = asyncHandler(async (req, res) => {
-  const { items, address, paymentMode } = req.body;
+  const { items, address, paymentMode, utr_number } = req.body;
 
   // Validate items
   if (!items || !Array.isArray(items) || items.length === 0) {
@@ -501,6 +501,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
     shippingDetails,
     finalTotalAmount,
     paymentMode,
+    utr_number: utr_number || null,
     status: "pending",
   });
   await order.save();
@@ -644,7 +645,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
 
 const createOrder = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { cartId, addressId, couponCode, paymentMode } = req.body;
+  const { cartId, addressId, couponCode, paymentMode, utr_number } = req.body;
 
   if (!["COD", "UPI"].includes(paymentMode)) {
     return res
@@ -816,6 +817,7 @@ const createOrder = asyncHandler(async (req, res) => {
     couponDiscountAmount,
     finalTotalAmount,
     paymentMode,
+    utr_number: utr_number || null,
     status: "pending",
   });
   await order.save();
@@ -1544,7 +1546,7 @@ const cancelOrder = asyncHandler(async (req, res) => {
       .json(new ApiResponse(404, null, "Order not found", false));
   }
 
-  const cancellableStatuses = ["pending", "confirmed", "processing"];
+  const cancellableStatuses = ["pending", "confirmed", "processing", "shipped", "delivered"];
   if (!cancellableStatuses.includes(order.status)) {
     return res
       .status(400)
@@ -2341,6 +2343,9 @@ const updateOrder = asyncHandler(async (req, res) => {
     // Update other fields if provided
     if (updateData.notes) {
       order.notes = updateData.notes;
+    }
+    if (updateData.utr_number !== undefined) {
+      order.utr_number = updateData.utr_number;
     }
 
     await order.save();

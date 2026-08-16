@@ -230,6 +230,10 @@ const OrderSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  utr_number: {
+    type: String,
+    default: null
+  },
   // Set once the order's invoice PDF has been generated (on first transition
   // to "confirmed"). Presence of billUrl is the idempotency check — never
   // regenerate once set.

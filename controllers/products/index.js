@@ -763,6 +763,7 @@ const exportProducts = asyncHandler(async (req, res) => {
         variant_price: handlePrice(variant.price),
         variant_discounted_price: handlePrice(variant.discounted_price),
         variant_inventory: variant.inventory || "",
+        variant_expiry_date: variant.expiry_date ? new Date(variant.expiry_date).toISOString().split('T')[0] : "",
         variant_images: Array.isArray(variant.images)
           ? variant.images.join("|")
           : "",
@@ -777,6 +778,7 @@ const exportProducts = asyncHandler(async (req, res) => {
           variant_price: "",
           variant_discounted_price: "",
           variant_inventory: "",
+          variant_expiry_date: "",
           variant_images: "",
         },
       ];
@@ -873,6 +875,7 @@ const generateSampleFile = asyncHandler(async (req, res) => {
       variant_price: "Variant Price (Required if product has variants)",
       variant_discounted_price: "Variant Discounted Price (Optional)",
       variant_inventory: "Variant Inventory (Optional)",
+      variant_expiry_date: "Variant Expiry Date (Optional) - YYYY-MM-DD format",
       variant_images:
         "Variant Images (Optional) - Pipe separated: image1.jpg|image2.jpg",
     };
@@ -1003,6 +1006,7 @@ const generateSampleFile = asyncHandler(async (req, res) => {
           variant_price: "Variant Price (Required if variants)",
           variant_discounted_price: "Variant Discounted Price (Optional)",
           variant_inventory: "Variant Inventory (Optional)",
+          variant_expiry_date: "Variant Expiry Date (Optional) - YYYY-MM-DD format",
           variant_images: "Variant Images (Optional) - Pipe separated",
         },
         {
@@ -1030,6 +1034,7 @@ const generateSampleFile = asyncHandler(async (req, res) => {
           variant_price: "",
           variant_discounted_price: "",
           variant_inventory: "",
+          variant_expiry_date: "",
           variant_images: "",
         },
       ];

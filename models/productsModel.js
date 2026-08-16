@@ -137,6 +137,7 @@ const ProductSchema = new mongoose.Schema(
         images: [String],
         color: { type: String, trim: true, default: null },
         weight_in_grams: { type: Number, min: 0, default: null },
+        expiry_date: { type: Date, default: null },
       },
     ],
     // Bulk/pack-size pricing for the base product (not available on variants).
