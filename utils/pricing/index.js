@@ -37,16 +37,18 @@ const getProductQuantityOptions = (product) => {
  *   returns null for anything else (caller should reject).
  */
 const resolveProductUnitPrice = (product, quantity) => {
-  if (!hasPriceTiers(product)) {
-    return Number.isInteger(quantity) && quantity >= 1
-      ? getProductBasePrice(product)
-      : null;
+  if (!Number.isInteger(quantity) || quantity < 1) return null;
+
+  if (hasPriceTiers(product)) {
+    const match = getProductQuantityOptions(product).find(
+      (option) => option.quantity === quantity
+    );
+    if (match) {
+      return match.price;
+    }
   }
 
-  const match = getProductQuantityOptions(product).find(
-    (option) => option.quantity === quantity
-  );
-  return match ? match.price : null;
+  return getProductBasePrice(product);
 };
 
 module.exports = {

@@ -77,18 +77,10 @@ const ensureOrderBillGenerated = async (order) => {
 };
 
 // Resolves a product order line's per-unit MRP and per-unit charged price (tier-aware) for a given quantity.
-// Returns { error } if the quantity doesn't match qty=1 or one of the product's defined price tiers.
+// If quantity exactly matches a price tier, that tier's price is used; otherwise the base price applies.
 const resolveOrderItemUnitPrices = (product, quantity) => {
   const price = parseFloat(product.price.toString());
   const discountedPrice = resolveProductUnitPrice(product, quantity);
-  if (discountedPrice === null) {
-    const available = getProductQuantityOptions(product)
-      .map((o) => o.quantity)
-      .join(", ");
-    return {
-      error: `Invalid quantity ${quantity} for product "${product.name}". Available quantities: ${available}`,
-    };
-  }
   return { price, discountedPrice };
 };
 
@@ -349,11 +341,6 @@ const createGuestOrder = asyncHandler(async (req, res) => {
 
       const quantity = item.quantity || 1;
       const pricing = resolveOrderItemUnitPrices(product, quantity);
-      if (pricing.error) {
-        return res
-          .status(400)
-          .json(new ApiResponse(400, null, pricing.error, false));
-      }
       const { price, discountedPrice } = pricing;
       const itemTotal = price * quantity;
       const discountedItemTotal = discountedPrice * quantity;
@@ -693,11 +680,6 @@ const createOrder = asyncHandler(async (req, res) => {
           : price;
       } else {
         const pricing = resolveOrderItemUnitPrices(product, cartItem.quantity);
-        if (pricing.error) {
-          return res
-            .status(400)
-            .json(new ApiResponse(400, null, pricing.error, false));
-        }
         ({ price, discountedPrice } = pricing);
       }
 
@@ -1386,11 +1368,6 @@ const editOrder = asyncHandler(async (req, res) => {
             : price;
         } else {
           const pricing = resolveOrderItemUnitPrices(product, item.quantity);
-          if (pricing.error) {
-            return res
-              .status(400)
-              .json(new ApiResponse(400, null, pricing.error, false));
-          }
           ({ price, discountedPrice } = pricing);
         }
 
@@ -1935,11 +1912,6 @@ const updateOrder = asyncHandler(async (req, res) => {
         }
 
         const pricing = resolveOrderItemUnitPrices(product, qty);
-        if (pricing.error) {
-          return res
-            .status(400)
-            .json(new ApiResponse(400, null, pricing.error, false));
-        }
         const { price, discountedPrice } = pricing;
         const itemTotal = price * qty;
         const discountedItemTotal = discountedPrice * qty;
@@ -2025,11 +1997,6 @@ const updateOrder = asyncHandler(async (req, res) => {
           }
 
           const pricing = resolveOrderItemUnitPrices(product, quantity);
-          if (pricing.error) {
-            return res
-              .status(400)
-              .json(new ApiResponse(400, null, pricing.error, false));
-          }
           const { price, discountedPrice } = pricing;
           const itemTotal = price * quantity;
           const discountedItemTotal = discountedPrice * quantity;

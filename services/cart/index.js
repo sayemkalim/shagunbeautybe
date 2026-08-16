@@ -51,17 +51,9 @@ const updateCart = async ({
           ? parseFloat(variant.discounted_price.toString())
           : parseFloat(variant.price.toString());
       } else {
-        // Use the product's base/bulk pricing — quantity must match qty=1 or one of the product's price tiers
-        const resolvedPrice = resolveProductUnitPrice(itemData, quantity);
-        if (resolvedPrice === null) {
-          const available = getProductQuantityOptions(itemData)
-            .map((o) => o.quantity)
-            .join(", ");
-          throw new Error(
-            `Invalid quantity ${quantity} for this product. Available quantities: ${available}`
-          );
-        }
-        itemPrice = resolvedPrice;
+        // Resolve unit price — if quantity matches a price tier, that tier's price applies;
+        // otherwise the base (discounted_price / price) applies for any other quantity.
+        itemPrice = resolveProductUnitPrice(itemData, quantity);
       }
     }
 
