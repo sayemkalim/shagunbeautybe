@@ -84,6 +84,61 @@ const resolveOrderItemUnitPrices = (product, quantity) => {
   return { price, discountedPrice };
 };
 
+// Resolves a product order item snapshot including variant pricing, title, images, and variant_sku
+const resolveProductOrderItem = (product, quantity, variantSku = null) => {
+  let price, discountedPrice;
+  let variantObj = null;
+  if (variantSku && Array.isArray(product.variants)) {
+    variantObj = product.variants.find(
+      (v) => v.sku === variantSku || v._id?.toString() === variantSku?.toString()
+    );
+    if (variantObj) {
+      price = parseFloat((variantObj.price ?? product.price).toString());
+      discountedPrice = variantObj.discounted_price !== null && variantObj.discounted_price !== undefined
+        ? parseFloat(variantObj.discounted_price.toString())
+        : (variantObj.price ? parseFloat(variantObj.price.toString()) : price);
+    } else {
+      price = parseFloat(product.price.toString());
+      discountedPrice = product.discounted_price
+        ? parseFloat(product.discounted_price.toString())
+        : price;
+    }
+  } else {
+    const pricing = resolveOrderItemUnitPrices(product, quantity);
+    price = pricing.price;
+    discountedPrice = pricing.discountedPrice;
+  }
+
+  const itemTotal = price * quantity;
+  const discountedItemTotal = discountedPrice * quantity;
+
+  const itemWeight = (variantObj && variantObj.weight_in_grams !== undefined)
+    ? variantObj.weight_in_grams
+    : (product.weight_in_grams || 0);
+  const weightTotal = itemWeight * quantity;
+
+  const vImg = (variantObj?.images && variantObj.images[0]) || variantObj?.image || variantObj?.banner_image;
+
+  const orderItem = {
+    type: "product",
+    product: {
+      _id: product._id,
+      name: variantObj?.name || product.name,
+      price: price,
+      discounted_price: discountedPrice,
+      banner_image: vImg || product.banner_image,
+      images: (variantObj?.images && variantObj.images.length > 0) ? variantObj.images : product.images,
+      sub_category: product.sub_category,
+    },
+    variant_sku: variantSku || null,
+    quantity,
+    total_amount: itemTotal,
+    discounted_total_amount: discountedItemTotal,
+  };
+
+  return { orderItem, itemTotal, discountedItemTotal, weightTotal };
+};
+
 const exportOrders = asyncHandler(async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
@@ -340,32 +395,15 @@ const createGuestOrder = asyncHandler(async (req, res) => {
       }
 
       const quantity = item.quantity || 1;
-      const pricing = resolveOrderItemUnitPrices(product, quantity);
-      const { price, discountedPrice } = pricing;
-      const itemTotal = price * quantity;
-      const discountedItemTotal = discountedPrice * quantity;
+      const { orderItem, itemTotal, discountedItemTotal, weightTotal } = resolveProductOrderItem(
+        product,
+        quantity,
+        item.variant_sku
+      );
       totalAmount += itemTotal;
       discountedTotalAmount += discountedItemTotal;
-
-      // Calculate weight for shipping
-      if (product.weight_in_grams) {
-        totalWeightGrams += product.weight_in_grams * quantity;
-      }
-
-      orderItems.push({
-        type: "product",
-        product: {
-          _id: product._id,
-          name: product.name,
-          price: product.price,
-          discounted_price: product.discounted_price,
-          banner_image: product.banner_image,
-          sub_category: product.sub_category,
-        },
-        quantity: quantity,
-        total_amount: itemTotal,
-        discounted_total_amount: discountedItemTotal,
-      });
+      totalWeightGrams += weightTotal;
+      orderItems.push(orderItem);
     } else if (item.type === "bundle") {
       if (!item.bundle_id || !mongoose.Types.ObjectId.isValid(item.bundle_id)) {
         return res
@@ -671,42 +709,15 @@ const createOrder = asyncHandler(async (req, res) => {
       const product = await Product.findById(cartItem.product);
       if (!product) continue;
 
-      let price, discountedPrice;
-      if (cartItem.variant_sku) {
-        // Variant pricing is untouched by bulk price tiers (tiers are base-product only)
-        price = parseFloat(product.price.toString());
-        discountedPrice = product.discounted_price
-          ? parseFloat(product.discounted_price.toString())
-          : price;
-      } else {
-        const pricing = resolveOrderItemUnitPrices(product, cartItem.quantity);
-        ({ price, discountedPrice } = pricing);
-      }
-
-      const itemTotal = price * cartItem.quantity;
-      const discountedItemTotal = discountedPrice * cartItem.quantity;
+      const { orderItem, itemTotal, discountedItemTotal, weightTotal } = resolveProductOrderItem(
+        product,
+        cartItem.quantity,
+        cartItem.variant_sku
+      );
       totalAmount += itemTotal;
       discountedTotalAmount += discountedItemTotal;
-
-      // Calculate weight for shipping
-      if (product.weight_in_grams) {
-        totalWeightGrams += product.weight_in_grams * cartItem.quantity;
-      }
-
-      orderItems.push({
-        type: "product",
-        product: {
-          _id: product._id,
-          name: product.name,
-          price: product.price,
-          discounted_price: product.discounted_price,
-          banner_image: product.banner_image,
-          sub_category: product.sub_category,
-        },
-        quantity: cartItem.quantity,
-        total_amount: itemTotal,
-        discounted_total_amount: discountedItemTotal,
-      });
+      totalWeightGrams += weightTotal;
+      orderItems.push(orderItem);
     } else if (cartItem.type === "bundle") {
       const bundle = await Bundle.findById(cartItem.bundle);
       if (!bundle) continue;
@@ -1359,42 +1370,15 @@ const editOrder = asyncHandler(async (req, res) => {
         const product = await Product.findById(item.product);
         if (!product) continue;
 
-        let price, discountedPrice;
-        if (item.variant_sku) {
-          // Variant pricing is untouched by bulk price tiers (tiers are base-product only)
-          price = parseFloat(product.price.toString());
-          discountedPrice = product.discounted_price
-            ? parseFloat(product.discounted_price.toString())
-            : price;
-        } else {
-          const pricing = resolveOrderItemUnitPrices(product, item.quantity);
-          ({ price, discountedPrice } = pricing);
-        }
-
-        const itemTotal = price * item.quantity;
-        const discountedItemTotal = discountedPrice * item.quantity;
+        const { orderItem, itemTotal, discountedItemTotal, weightTotal } = resolveProductOrderItem(
+          product,
+          item.quantity,
+          item.variant_sku
+        );
         totalAmount += itemTotal;
         discountedTotalAmount += discountedItemTotal;
-
-        // Calculate weight for shipping
-        if (product.weight_in_grams) {
-          totalWeightGrams += product.weight_in_grams * item.quantity;
-        }
-
-        orderItems.push({
-          type: "product",
-          product: {
-            _id: product._id,
-            name: product.name,
-            price: product.price,
-            discounted_price: product.discounted_price,
-            banner_image: product.banner_image,
-            sub_category: product.sub_category,
-          },
-          quantity: item.quantity,
-          total_amount: itemTotal,
-          discounted_total_amount: discountedItemTotal,
-        });
+        totalWeightGrams += weightTotal;
+        orderItems.push(orderItem);
       } else if (item.type === "bundle") {
         const bundle = await Bundle.findById(item.bundle);
         if (!bundle) continue;

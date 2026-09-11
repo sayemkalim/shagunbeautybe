@@ -17,6 +17,7 @@ const OrderItemSchema = new mongoose.Schema({
       price: mongoose.Schema.Types.Decimal128,
       discounted_price: mongoose.Schema.Types.Decimal128,
       banner_image: String,
+      images: [String],
       sub_category: mongoose.Schema.Types.ObjectId,
     }),
     required: function() { return this.type === "product"; }
@@ -41,6 +42,10 @@ const OrderItemSchema = new mongoose.Schema({
       ],
     }),
     required: function() { return this.type === "bundle"; }
+  },
+  variant_sku: {
+    type: String,
+    default: null,
   },
   quantity: {
     type: Number,

@@ -236,7 +236,7 @@ const applyOrderItemsAdjustment = async (order, direction) => {
       if (item.type === "product" && item.product && item.product._id) {
         await adjustStock({
           productId: item.product._id,
-          variantSku: null,
+          variantSku: item.variant_sku || null,
           quantityChange: direction * item.quantity,
           type,
           referenceType: "order",

@@ -142,6 +142,7 @@ const updateCart = async ({
 
   let existingItemIndex = -1;
   if (type === "product") {
+    const targetVariant = variant_sku || null;
     existingItemIndex = cart.items.findIndex(
       (i) =>
         i.type === "product" &&
@@ -150,7 +151,7 @@ const updateCart = async ({
           (typeof i.product === "object" &&
             i.product._id &&
             i.product._id.toString() === product_id)) &&
-        (!variant_sku || i.variant_sku === variant_sku)
+        ((i.variant_sku || null) === targetVariant)
     );
   } else if (type === "bundle") {
     existingItemIndex = cart.items.findIndex(
