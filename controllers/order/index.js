@@ -41,8 +41,8 @@ const { buildOrderBillPdfBuffer } = require("../../utils/pdf/orderBill.js");
 // Idempotently generates + uploads the order's invoice PDF (skipped if
 // order.billUrl is already set) and persists the resulting URL on the order.
 // Safe to call any time an order's status becomes "confirmed" or later.
-const ensureOrderBillGenerated = async (order) => {
-  if (order.billUrl) return order;
+const ensureOrderBillGenerated = async (order, { force = false } = {}) => {
+  if (order.billUrl && !force) return order;
 
   let customer;
   if (order.isGuestOrder) {
@@ -1261,7 +1261,8 @@ const getOrderBill = asyncHandler(async (req, res) => {
       .json(new ApiResponse(404, null, "Order not found", false));
   }
 
-  if (!order.billUrl) {
+  const force = req.query.regenerate === "true" || req.query.force === "true";
+  if (!order.billUrl || force) {
     if (order.status === "pending") {
       return res
         .status(404)
@@ -1276,7 +1277,7 @@ const getOrderBill = asyncHandler(async (req, res) => {
     }
 
     try {
-      await ensureOrderBillGenerated(order);
+      await ensureOrderBillGenerated(order, { force });
     } catch (error) {
       console.error(`Bill generation failed for order ${order._id}:`, error.message);
       return res
