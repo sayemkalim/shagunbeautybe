@@ -9,7 +9,45 @@ const {
 } = require("../../utils/pricing/index.js");
 
 const getCart = async ({ user_id }) => {
-  const cart = await CartRepository.getCartByUserId({ user_id });
+  let cart = await CartRepository.getCartByUserId({ user_id });
+  if (cart && Array.isArray(cart.items) && cart.items.length > 0) {
+    let priceChanged = false;
+    let newCartTotal = 0;
+
+    cart.items.forEach((item) => {
+      if (item.type === "product" && item.product) {
+        const prod = item.product;
+        let currentUnitPrice = 0;
+
+        if (item.variant_sku && Array.isArray(prod.variants)) {
+          const variant = prod.variants.find((v) => v.sku === item.variant_sku);
+          if (variant) {
+            currentUnitPrice =
+              variant.discounted_price !== null && variant.discounted_price !== undefined
+                ? parseFloat(variant.discounted_price.toString())
+                : parseFloat(variant.price.toString());
+          }
+        } else {
+          currentUnitPrice = resolveProductUnitPrice(prod, item.quantity || 1);
+        }
+
+        if (currentUnitPrice > 0) {
+          const currentItemTotal = currentUnitPrice * (item.quantity || 1);
+          if (item.price !== currentUnitPrice || item.total !== currentItemTotal) {
+            item.price = currentUnitPrice;
+            item.total = currentItemTotal;
+            priceChanged = true;
+          }
+        }
+      }
+      newCartTotal += item.total || (item.price || 0) * (item.quantity || 1) || 0;
+    });
+
+    if (priceChanged) {
+      cart.total_price = newCartTotal;
+      await cart.save();
+    }
+  }
   return cart;
 };
 
