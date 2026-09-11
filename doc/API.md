@@ -2192,3 +2192,107 @@ Razorpay payment webhook receiver — updates order payment status when Razorpay
 - `500 {"error":"Webhook processing failed"}` — unexpected exception.
 
 **Notable behavior**: On `payment.captured`, looks up the order by `paymentLinkId`, verifies the paid amount (in paise) matches `order.finalTotalAmount`, and if so sets `paymentStatus: "paid"`, `paymentId`, `paymentMethod`, `paidAt`, and bumps `status` from `"pending"` to `"confirmed"`. On `payment.failed`, sets `paymentStatus: "failed"`. **Important caveat**: this route computes the HMAC over `JSON.stringify(req.body)`, i.e. the body *after* Express's `express.json()` middleware has already parsed and re-serialized it — if Razorpay's actual raw request bytes differ in formatting/key order from Node's re-serialization, signature verification could fail even for genuine requests; a raw-body capture is generally recommended for webhook signature verification and does not appear to be used here.
+
+---
+
+## Marquee
+
+Base path: `/api/marquee`. Source: `routes/marquee/index.js`, controllers in `controllers/marquee/index.js`.
+
+### GET /api/marquee/active
+
+Fetch all currently active marquee / ticker announcement text items (sorted by `order` ascending). Used by the mobile app and storefront.
+
+**Auth**: None (public).
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": [
+    {
+      "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "text": "SUPER FESTIVE SALE • SALE IS LIVE",
+      "order": 0,
+      "is_active": true,
+      "createdAt": "2026-09-11T12:00:00.000Z",
+      "updatedAt": "2026-09-11T12:00:00.000Z"
+    }
+  ],
+  "message": "Active marquees fetched successfully",
+  "success": true
+}
+```
+
+---
+
+### GET /api/marquee
+
+List marquee items with pagination and optional filter.
+
+**Auth**: `adminOrSuperAdmin`.
+
+**Query params**:
+- `page` (default `1`)
+- `per_page` (default `50`)
+- `is_active` (`true` | `false`)
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "total": 1,
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 1,
+    "marquees": [...]
+  },
+  "message": "Marquees fetched successfully",
+  "success": true
+}
+```
+
+---
+
+### GET /api/marquee/:id
+
+Get marquee item by MongoDB ObjectId.
+
+**Auth**: `adminOrSuperAdmin`.
+
+---
+
+### POST /api/marquee
+
+Create a new marquee announcement text item.
+
+**Auth**: `adminOrSuperAdmin`.
+
+**Request body** (JSON):
+```json
+{
+  "text": "SUPER FESTIVE SALE • SALE IS LIVE",
+  "order": 0,
+  "is_active": true
+}
+```
+
+**Success response** `201`: Returns created marquee document.
+
+---
+
+### PUT /api/marquee/:id
+
+Update an existing marquee item.
+
+**Auth**: `adminOrSuperAdmin`.
+
+---
+
+### DELETE /api/marquee/:id
+
+Delete a marquee item.
+
+**Auth**: `adminOrSuperAdmin`.
+
