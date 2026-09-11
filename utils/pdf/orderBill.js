@@ -182,11 +182,19 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
 
       doc.font("Helvetica-Bold").fontSize(11).fillColor(TEXT_DARK).text("Shipping Address", 300, y);
       const addr = order.address || {};
+      const phone = addr.mobile || addr.phone || customer?.mobile;
+      const formatPhone = (val, prefix = "Phone") => {
+        if (!val) return null;
+        const str = String(val).trim();
+        return str.toLowerCase().startsWith("phone") ? str : `${prefix}: ${str}`;
+      };
       const addressLines = [
         addr.name,
         addr.address,
         [addr.locality, addr.city].filter(Boolean).join(", "),
         [addr.state, addr.pincode].filter(Boolean).join(" - "),
+        formatPhone(phone, "Phone"),
+        formatPhone(addr.alternatePhone, "Alt Phone"),
       ].filter(Boolean);
       doc
         .font("Helvetica")
