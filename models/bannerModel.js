@@ -6,10 +6,17 @@ const BannerSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    products: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Product",
+      },
+    ],
+    // Retained for backward compatibility with storefront / legacy consumers
     product: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
-      required: true,
+      default: null,
     },
     // Controls display order in the storefront carousel (ascending)
     order: {

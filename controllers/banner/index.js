@@ -37,22 +37,77 @@ const getBannerById = asyncHandler(async (req, res) => {
   res.json(new ApiResponse(200, banner, "Banner fetched successfully", true));
 });
 
+const extractProductIds = (body) => {
+  let raw = body.products ?? body.product_ids ?? body.product_id;
+  if (raw === undefined || raw === null || raw === "") return [];
+
+  if (typeof raw === "string") {
+    raw = raw.trim();
+    if (raw.startsWith("[") && raw.endsWith("]")) {
+      try {
+        raw = JSON.parse(raw);
+      } catch (e) {
+        raw = raw.slice(1, -1).split(",");
+      }
+    } else if (raw.includes(",")) {
+      raw = raw.split(",");
+    } else {
+      raw = [raw];
+    }
+  }
+
+  if (!Array.isArray(raw)) {
+    raw = [raw];
+  }
+
+  const ids = [];
+  for (let item of raw) {
+    if (!item) continue;
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+        ids.push(trimmed.slice(1, -1).trim());
+      } else if (trimmed.includes(",")) {
+        ids.push(...trimmed.split(",").map((s) => s.trim()));
+      } else {
+        ids.push(trimmed);
+      }
+    } else if (typeof item === "object") {
+      if (item._id) ids.push(String(item._id).trim());
+      else if (item.product) ids.push(String(item.product).trim());
+      else if (item.id) ids.push(String(item.id).trim());
+    }
+  }
+
+  return [...new Set(ids.filter(Boolean))];
+};
+
 const createBanner = asyncHandler(async (req, res) => {
-  const { product_id, order, is_active } = req.body;
+  const { order, is_active } = req.body;
 
   if (!req.file) {
     return res.json(new ApiResponse(400, null, "Banner image is required", false));
   }
 
-  if (!product_id || !mongoose.Types.ObjectId.isValid(product_id)) {
-    return res.json(new ApiResponse(400, null, "A valid product_id is required", false));
+  const productIds = extractProductIds(req.body);
+  if (productIds.length === 0) {
+    return res.json(
+      new ApiResponse(400, null, "At least one valid product is required", false)
+    );
+  }
+
+  const invalidIds = productIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+  if (invalidIds.length > 0) {
+    return res.json(
+      new ApiResponse(400, null, `Invalid product ID(s): ${invalidIds.join(", ")}`, false)
+    );
   }
 
   const banner_url = await uploadSingleFile(req.file.path, "uploads/banners");
 
   const result = await BannerService.createBanner({
     banner_url,
-    product: product_id,
+    products: productIds,
     order: order !== undefined ? Number(order) : 0,
     is_active: is_active !== undefined ? is_active === "true" : true,
     created_by: req.admin._id,
@@ -72,14 +127,30 @@ const updateBanner = asyncHandler(async (req, res) => {
     return res.json(new ApiResponse(400, null, "Invalid banner ID", false));
   }
 
-  const { product_id, order, is_active } = req.body;
+  const { order, is_active } = req.body;
   const data = {};
 
-  if (product_id) {
-    if (!mongoose.Types.ObjectId.isValid(product_id)) {
-      return res.json(new ApiResponse(400, null, "Invalid product_id", false));
+  const hasProductsField =
+    req.body.products !== undefined ||
+    req.body.product_ids !== undefined ||
+    req.body.product_id !== undefined;
+
+  if (hasProductsField) {
+    const productIds = extractProductIds(req.body);
+    if (productIds.length === 0) {
+      return res.json(
+        new ApiResponse(400, null, "At least one valid product is required", false)
+      );
     }
-    data.product = product_id;
+
+    const invalidIds = productIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length > 0) {
+      return res.json(
+        new ApiResponse(400, null, `Invalid product ID(s): ${invalidIds.join(", ")}`, false)
+      );
+    }
+
+    data.products = productIds;
   }
 
   if (order !== undefined) data.order = Number(order);

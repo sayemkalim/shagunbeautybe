@@ -26,21 +26,64 @@ const getBannerById = async (id) => {
 };
 
 const createBanner = async (data) => {
-  const product = await Product.findById(data.product);
-  if (!product) {
-    return { success: false, error: "product_not_found", message: "Product not found" };
+  const productIds = data.products || (data.product ? [data.product] : []);
+  if (productIds.length === 0) {
+    return {
+      success: false,
+      error: "product_required",
+      message: "At least one product is required",
+    };
   }
 
-  const banner = await BannerRepository.createBanner(data);
+  const foundProducts = await Product.find({ _id: { $in: productIds } }).select("_id");
+  if (foundProducts.length !== productIds.length) {
+    const foundSet = new Set(foundProducts.map((p) => p._id.toString()));
+    const missingIds = productIds.filter((id) => !foundSet.has(String(id)));
+    return {
+      success: false,
+      error: "product_not_found",
+      message: `Product(s) not found: ${missingIds.join(", ")}`,
+    };
+  }
+
+  const bannerData = {
+    ...data,
+    products: productIds,
+    product: productIds[0] || null,
+  };
+
+  const banner = await BannerRepository.createBanner(bannerData);
   return { success: true, banner };
 };
 
 const updateBanner = async (id, data) => {
-  if (data.product) {
-    const product = await Product.findById(data.product);
-    if (!product) {
-      return { success: false, error: "product_not_found", message: "Product not found" };
+  let productIds = data.products;
+  if (!productIds && data.product) {
+    productIds = [data.product];
+  }
+
+  if (productIds) {
+    if (productIds.length === 0) {
+      return {
+        success: false,
+        error: "product_required",
+        message: "At least one product is required",
+      };
     }
+
+    const foundProducts = await Product.find({ _id: { $in: productIds } }).select("_id");
+    if (foundProducts.length !== productIds.length) {
+      const foundSet = new Set(foundProducts.map((p) => p._id.toString()));
+      const missingIds = productIds.filter((id) => !foundSet.has(String(id)));
+      return {
+        success: false,
+        error: "product_not_found",
+        message: `Product(s) not found: ${missingIds.join(", ")}`,
+      };
+    }
+
+    data.products = productIds;
+    data.product = productIds[0] || null;
   }
 
   const banner = await BannerRepository.updateBanner(id, data);
