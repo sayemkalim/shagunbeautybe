@@ -17,6 +17,7 @@ const OrderItemSchema = new mongoose.Schema({
       price: mongoose.Schema.Types.Decimal128,
       discounted_price: mongoose.Schema.Types.Decimal128,
       banner_image: String,
+      image: String,
       images: [String],
       sub_category: mongoose.Schema.Types.ObjectId,
     }),
@@ -287,10 +288,85 @@ OrderSchema.set("toJSON", {
     if (Array.isArray(ret.items)) {
       ret.items = ret.items.map(item => {
         if (item.type === "product" && item.product) {
+          const bannerImage = item.product.banner_image || null;
+          const imagesList = Array.isArray(item.product.images) ? item.product.images : [];
+          const productImage =
+            item.product.image ||
+            bannerImage ||
+            (imagesList.length > 0 ? imagesList[0] : null);
+
           return {
             ...item,
             product: {
               ...item.product,
+              banner_image: bannerImage,
+              image: productImage,
+              images: imagesList,
+              price: item.product.price ? parseFloat(item.product.price.toString()) : null,
+              discounted_price: item.product.discounted_price
+                ? parseFloat(item.product.discounted_price.toString())
+                : null
+            },
+            total_amount: item.total_amount ? parseFloat(item.total_amount.toString()) : null,
+            discounted_total_amount: item.discounted_total_amount ? parseFloat(item.discounted_total_amount.toString()) : null
+          };
+        } else if (item.type === "bundle" && item.bundle) {
+          return {
+            ...item,
+            bundle: {
+              ...item.bundle,
+              price: item.bundle.price ? parseFloat(item.bundle.price.toString()) : null,
+              discounted_price: item.bundle.discounted_price
+                ? parseFloat(item.bundle.discounted_price.toString())
+                : null
+            },
+            total_amount: item.total_amount ? parseFloat(item.total_amount.toString()) : null,
+            discounted_total_amount: item.discounted_total_amount ? parseFloat(item.discounted_total_amount.toString()) : null
+          };
+        }
+        return item;
+      });
+    }
+
+    return ret;
+  }
+});
+
+OrderSchema.set("toObject", {
+  transform: (doc, ret) => {
+    if (ret.totalAmount) {
+      ret.totalAmount = parseFloat(ret.totalAmount.toString());
+    }
+    if (ret.discountedTotalAmount) {
+      ret.discountedTotalAmount = parseFloat(ret.discountedTotalAmount.toString());
+    }
+    if (ret.shippingCost) {
+      ret.shippingCost = parseFloat(ret.shippingCost.toString());
+    }
+    if (ret.couponDiscountAmount) {
+      ret.couponDiscountAmount = parseFloat(ret.couponDiscountAmount.toString());
+    }
+    if (ret.finalTotalAmount) {
+      ret.finalTotalAmount = parseFloat(ret.finalTotalAmount.toString());
+    }
+
+    if (Array.isArray(ret.items)) {
+      ret.items = ret.items.map(item => {
+        if (item.type === "product" && item.product) {
+          const bannerImage = item.product.banner_image || null;
+          const imagesList = Array.isArray(item.product.images) ? item.product.images : [];
+          const productImage =
+            item.product.image ||
+            bannerImage ||
+            (imagesList.length > 0 ? imagesList[0] : null);
+
+          return {
+            ...item,
+            product: {
+              ...item.product,
+              banner_image: bannerImage,
+              image: productImage,
+              images: imagesList,
               price: item.product.price ? parseFloat(item.product.price.toString()) : null,
               discounted_price: item.product.discounted_price
                 ? parseFloat(item.product.discounted_price.toString())

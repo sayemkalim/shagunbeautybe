@@ -2296,3 +2296,93 @@ Delete a marquee item.
 
 **Auth**: `adminOrSuperAdmin`.
 
+---
+
+## Second Banner
+
+Base paths: `/api/second-banner`, `/api/second_banner`, `/api/banner/second`. Source: `routes/secondBanner/index.js`, controllers in `controllers/secondBanner/index.js`, models in `models/secondBannerModel.js`.
+
+The Second Banner API manages single promotional banner images (such as the "Weekend Sale Banner" on mobile home screens), distinct from `/api/banner` which manages carousel slides requiring product collections.
+
+### GET /api/second-banner/active
+**Public** (no auth required).
+Fetch the currently active second banner for the storefront / mobile app.
+- Query params:
+  - `format=array` or `array=true`: returns array of active second banners `[ banner ]`.
+  - default: returns the primary active second banner object `{ _id, banner_url, title, product, link, is_active }` or `null`.
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "_id": "6aa8367e6eaa29879b7bc77a",
+    "banner_url": "https://res.cloudinary.com/shagun/image/upload/v1234/second_banners/sale.jpg",
+    "title": "Weekend Sale",
+    "product": null,
+    "link": "",
+    "order": 0,
+    "is_active": true,
+    "createdAt": "2026-09-14T18:00:00.000Z",
+    "updatedAt": "2026-09-14T18:00:00.000Z"
+  },
+  "message": "Active second banner fetched successfully",
+  "success": true
+}
+```
+
+### GET /api/second-banner/active/all
+**Public** (no auth required).
+Returns all currently active second banners as an array list `[ banner ]`.
+
+### GET /api/second-banner
+**Auth**: `adminOrSuperAdmin`.
+List all second banners with pagination and filter:
+- Query params:
+  - `page` (default 1)
+  - `per_page` (default 50)
+  - `is_active` (`true` | `false`)
+
+### POST /api/second-banner
+**Auth**: `adminOrSuperAdmin`.
+**Content-Type**: `multipart/form-data` or `application/json`.
+Upload a new second banner.
+- Form fields:
+  - `banner_image` (file, required unless `banner_url` is provided)
+  - `title` (string, optional)
+  - `product` / `product_id` (ObjectId string, optional — links to a single product if tapped)
+  - `link` (string, optional)
+  - `order` (number, optional, default `0`)
+  - `is_active` (boolean, optional, default `true`)
+
+**Success response** `201`:
+```json
+{
+  "statusCode": 201,
+  "data": {
+    "_id": "...",
+    "banner_url": "https://...",
+    "title": "Weekend Sale",
+    "product": null,
+    "link": "",
+    "order": 0,
+    "is_active": true
+  },
+  "message": "Second banner created successfully",
+  "success": true
+}
+```
+
+### GET /api/second-banner/:id
+**Auth**: `adminOrSuperAdmin`.
+Get second banner by ID.
+
+### PUT /api/second-banner/:id
+**Auth**: `adminOrSuperAdmin`.
+**Content-Type**: `multipart/form-data` or `application/json`.
+Update a second banner. Accepts optional new `banner_image` file or any updated fields (`title`, `product`, `link`, `order`, `is_active`).
+
+### DELETE /api/second-banner/:id
+**Auth**: `adminOrSuperAdmin`.
+Delete a second banner by ID.
+

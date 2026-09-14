@@ -5,9 +5,14 @@ const BannerController = require("../../controllers/banner/index.js");
 const {
   adminOrSuperAdmin,
 } = require("../../middleware/auth/adminMiddleware.js");
+const secondBannerRoutes = require("../secondBanner/index.js");
 const router = express.Router();
 
 const upload = multer({ storage: storage });
+
+// Second Banner sub-routes under /api/banner/second
+router.use("/second", secondBannerRoutes);
+router.use("/second-banner", secondBannerRoutes);
 
 // Public (must stay above "/:id" below, or "/active" gets swallowed as an id)
 router.get("/active", BannerController.getActiveBanners);

@@ -118,6 +118,9 @@ const resolveProductOrderItem = (product, quantity, variantSku = null) => {
   const weightTotal = itemWeight * quantity;
 
   const vImg = (variantObj?.images && variantObj.images[0]) || variantObj?.image || variantObj?.banner_image;
+  const pImages = (variantObj?.images && variantObj.images.length > 0) ? variantObj.images : (product.images || []);
+  const pBannerImage = vImg || product.banner_image || (pImages.length > 0 ? pImages[0] : null);
+  const pImage = vImg || (pImages.length > 0 ? pImages[0] : null) || product.banner_image || null;
 
   const orderItem = {
     type: "product",
@@ -126,8 +129,9 @@ const resolveProductOrderItem = (product, quantity, variantSku = null) => {
       name: variantObj?.name || product.name,
       price: price,
       discounted_price: discountedPrice,
-      banner_image: vImg || product.banner_image,
-      images: (variantObj?.images && variantObj.images.length > 0) ? variantObj.images : product.images,
+      banner_image: pBannerImage,
+      image: pImage,
+      images: pImages,
       sub_category: product.sub_category,
     },
     variant_sku: variantSku || null,
@@ -1621,7 +1625,9 @@ const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
                 discounted_price: item.product.discounted_price
                   ? parseFloat(item.product.discounted_price.toString())
                   : null,
-                banner_image: item.product.banner_image,
+                banner_image: item.product.banner_image || (item.product.images && item.product.images[0]) || null,
+                image: item.product.image || item.product.banner_image || (item.product.images && item.product.images[0]) || null,
+                images: item.product.images || [],
               },
               totalOrders: 0,
               totalQuantity: 0,
@@ -1722,7 +1728,9 @@ const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
             discounted_price: product.discounted_price
               ? parseFloat(product.discounted_price.toString())
               : null,
-            banner_image: product.banner_image,
+            banner_image: product.banner_image || (product.images && product.images[0]) || null,
+            image: product.image || (product.images && product.images[0]) || product.banner_image || null,
+            images: product.images || [],
           };
         }
       }
@@ -1909,7 +1917,9 @@ const updateOrder = asyncHandler(async (req, res) => {
             name: product.name,
             price: product.price,
             discounted_price: product.discounted_price,
-            banner_image: product.banner_image,
+            banner_image: product.banner_image || (product.images && product.images[0]) || null,
+            image: (product.images && product.images[0]) || product.banner_image || null,
+            images: product.images || [],
             sub_category: product.sub_category,
           },
           quantity: qty,
@@ -2477,7 +2487,9 @@ const getOrdersByProductId = asyncHandler(async (req, res) => {
               discounted_price: item.product.discounted_price
                 ? parseFloat(item.product.discounted_price.toString())
                 : null,
-              banner_image: item.product.banner_image,
+              banner_image: item.product.banner_image || (item.product.images && item.product.images[0]) || null,
+              image: item.product.image || item.product.banner_image || (item.product.images && item.product.images[0]) || null,
+              images: item.product.images || [],
             };
           }
         } else if (
@@ -2538,7 +2550,9 @@ const getOrdersByProductId = asyncHandler(async (req, res) => {
           discounted_price: productDetails.discounted_price
             ? parseFloat(productDetails.discounted_price.toString())
             : null,
-          banner_image: productDetails.banner_image,
+          banner_image: productDetails.banner_image || (productDetails.images && productDetails.images[0]) || null,
+          image: (productDetails.images && productDetails.images[0]) || productDetails.banner_image || null,
+          images: productDetails.images || [],
         };
       }
     }

@@ -31,6 +31,7 @@ const webhookRoutes = require("./routes/webhook/index.js");
 const inventoryRoutes = require("./routes/inventory/index.js");
 const couponRoutes = require("./routes/coupon/index.js");
 const bannerRoutes = require("./routes/banner/index.js");
+const secondBannerRoutes = require("./routes/secondBanner/index.js");
 const marqueeRoutes = require("./routes/marquee/index.js");
 
 // Connect DB
@@ -74,6 +75,8 @@ app.use("/api/webhook", webhookRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/coupon", couponRoutes);
 app.use("/api/banner", bannerRoutes);
+app.use("/api/second-banner", secondBannerRoutes);
+app.use("/api/second_banner", secondBannerRoutes);
 app.use("/api/marquee", marqueeRoutes);
 
 app.use("/api-doc", swaggerUI.serve, swaggerUI.setup(swaggerSpec));

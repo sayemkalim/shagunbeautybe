@@ -22,7 +22,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
   // Generate items HTML
   const itemsHTML = order.items.map((item) => {
     const itemName = item.type === "product" ? item.product.name : item.bundle.name;
-    const itemImage = item.type === "product" ? item.product.banner_image : (item.bundle.images && item.bundle.images[0]);
+    const itemImage = item.type === "product" ? (item.product.image || item.product.banner_image) : (item.bundle.images && item.bundle.images[0]);
     const itemPrice = toNumber(item.discounted_total_amount);
     const itemDescription = item.type === "product" ? 
       (item.product.small_description || "Premium quality product") : 
@@ -850,7 +850,7 @@ const generateCustomerOrderUpdate = (order, user) => {
   // Generate items HTML
   const itemsHTML = order.items.map((item) => {
     const itemName = item.type === "product" ? item.product.name : item.bundle.name;
-    const itemImage = item.type === "product" ? item.product.banner_image : (item.bundle.images && item.bundle.images[0]);
+    const itemImage = item.type === "product" ? (item.product.image || item.product.banner_image) : (item.bundle.images && item.bundle.images[0]);
     const itemPrice = toNumber(item.discounted_total_amount);
     const itemDescription = item.type === "product" ? 
       (item.product.small_description || "Premium quality product") : 
