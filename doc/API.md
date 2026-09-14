@@ -2386,3 +2386,102 @@ Update a second banner. Accepts optional new `banner_image` file or any updated 
 **Auth**: `adminOrSuperAdmin`.
 Delete a second banner by ID.
 
+---
+
+## Card Banner
+
+Base paths: `/api/card-banner`, `/api/card_banner`. Source: `routes/cardBanner/index.js`, controllers in `controllers/cardBanner/index.js`, models in `models/cardBannerModel.js`.
+
+The Card Banner API supports banners/cards with optional text, multiple linked products, and a banner or card mode flag (`is_card` / `is_banner`).
+
+### GET /api/card-banner/active
+**Public** (no auth required).
+Fetch all currently active card banners (sorted by `order` ascending).
+- Query params:
+  - `is_card` (optional, boolean `true` | `false`): filter only cards or only banners.
+  - `is_banner` (optional, boolean `true` | `false`): filter only banners or only cards.
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": [
+    {
+      "_id": "6aa84d462eb89bae5c979239",
+      "banner_url": "https://res.cloudinary.com/.../card1.jpg",
+      "heading": "Trending Beauty Deals",
+      "text": "Get 30% off on premium lipstick sets",
+      "title": "Special Card Offer",
+      "products": [
+        {
+          "_id": "...",
+          "name": "Matte Lipstick",
+          "sku": "LIP-01",
+          "price": 499,
+          "discounted_price": 349,
+          "banner_image": "...",
+          "images": [...]
+        }
+      ],
+      "product": { ... },
+      "is_card": true,
+      "is_banner": false,
+      "order": 0,
+      "is_active": true,
+      "createdAt": "2026-09-15T00:00:00.000Z"
+    }
+  ],
+  "message": "Active card banners fetched successfully",
+  "success": true
+}
+```
+
+### GET /api/card-banner
+**Auth**: `adminOrSuperAdmin`.
+List card banners with pagination and filters:
+- Query params:
+  - `page` (default 1)
+  - `per_page` (default 50)
+  - `is_active` (`true` | `false`)
+  - `is_card` (`true` | `false`)
+  - `is_banner` (`true` | `false`)
+
+### POST /api/card-banner
+**Auth**: `adminOrSuperAdmin`.
+**Content-Type**: `multipart/form-data` or `application/json`.
+Create a new card banner.
+- Form fields:
+  - `banner_image` (File, required unless `banner_url` is provided)
+  - `heading` (String, optional): Main section heading for all card banners.
+  - `text` (String, optional): Description or promo text.
+  - `title` (String, optional): Title.
+  - `products` (Array or comma-separated string of Product ObjectIds, optional): Multiple products linked to this card/banner.
+  - `is_card` (Boolean, optional, default `false`): `true` if this item is a Card, `false` if it is a Banner.
+  - `is_banner` (Boolean, optional, default `true`): `true` if Banner, `false` if Card.
+  - `order` (Number, optional, default `0`).
+  - `is_active` (Boolean, optional, default `true`).
+
+**Success response** `201`: Returns created card banner document with populated products.
+
+### GET /api/card-banner/:id
+**Auth**: `adminOrSuperAdmin`.
+Get card banner by ID with populated products.
+
+### PUT /api/card-banner/heading
+**Auth**: `adminOrSuperAdmin`.
+**Content-Type**: `application/json`.
+Bulk update heading for all card banners at once.
+- Body:
+  ```json
+  { "heading": "Trending Beauty Deals" }
+  ```
+
+### PUT /api/card-banner/:id
+**Auth**: `adminOrSuperAdmin`.
+**Content-Type**: `multipart/form-data` or `application/json`.
+Update an existing card banner. Accepts optional new `banner_image` file, `heading`, `text`, `title`, `products`, `is_card`, `is_banner`, `order`, `is_active`.
+
+### DELETE /api/card-banner/:id
+**Auth**: `adminOrSuperAdmin`.
+Delete a card banner.
+

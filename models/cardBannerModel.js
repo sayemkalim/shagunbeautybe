@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const CardBannerSchema = new mongoose.Schema(
   {
+    heading: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     title: {
       type: String,
       trim: true,

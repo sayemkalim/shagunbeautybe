@@ -92,6 +92,7 @@ const createCardBanner = async (data) => {
 
   const bannerData = {
     banner_url: data.banner_url,
+    heading: data.heading ? String(data.heading).trim() : "",
     text: data.text ? String(data.text).trim() : "",
     title: data.title ? String(data.title).trim() : "",
     products: productIds,
@@ -111,6 +112,7 @@ const updateCardBanner = async (id, data) => {
   const updatePayload = {};
 
   if (data.banner_url) updatePayload.banner_url = data.banner_url;
+  if (data.heading !== undefined) updatePayload.heading = String(data.heading).trim();
   if (data.text !== undefined) updatePayload.text = String(data.text).trim();
   if (data.title !== undefined) updatePayload.title = String(data.title).trim();
   if (data.order !== undefined) updatePayload.order = Number(data.order);
@@ -160,6 +162,12 @@ const updateCardBanner = async (id, data) => {
   return { success: true, banner };
 };
 
+const updateAllHeading = async (heading) => {
+  const trimmed = heading ? String(heading).trim() : "";
+  await CardBannerRepository.updateAllHeading(trimmed);
+  return { heading: trimmed };
+};
+
 const deleteCardBanner = async (id) => {
   return await CardBannerRepository.deleteCardBanner(id);
 };
@@ -170,5 +178,6 @@ module.exports = {
   getCardBannerById,
   createCardBanner,
   updateCardBanner,
+  updateAllHeading,
   deleteCardBanner,
 };

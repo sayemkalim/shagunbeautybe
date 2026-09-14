@@ -75,6 +75,10 @@ const deleteCardBanner = async (id) => {
   return await CardBanner.findByIdAndDelete(id);
 };
 
+const updateAllHeading = async (heading) => {
+  return await CardBanner.updateMany({}, { $set: { heading } });
+};
+
 module.exports = {
   getAllCardBanners,
   countAllCardBanners,
@@ -83,4 +87,5 @@ module.exports = {
   createCardBanner,
   updateCardBanner,
   deleteCardBanner,
+  updateAllHeading,
 };

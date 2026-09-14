@@ -38,6 +38,16 @@ router.post(
 );
 router.get("/:id", adminOrSuperAdmin, CardBannerController.getCardBannerById);
 router.put(
+  "/heading",
+  adminOrSuperAdmin,
+  CardBannerController.updateAllHeading
+);
+router.put(
+  "/update-all-heading",
+  adminOrSuperAdmin,
+  CardBannerController.updateAllHeading
+);
+router.put(
   "/:id",
   adminOrSuperAdmin,
   uploadCardBanner,

@@ -101,8 +101,9 @@ const getCardBannerById = asyncHandler(async (req, res) => {
 });
 
 const createCardBanner = asyncHandler(async (req, res) => {
-  const { text, is_card, is_banner, order, is_active } = req.body;
-  const title = req.body.title || req.body.section_title || req.body.banner_title || req.body.heading || "";
+  const { heading, text, is_card, is_banner, order, is_active } = req.body;
+  const title = req.body.title || req.body.section_title || req.body.banner_title || "";
+  const bannerHeading = heading || req.body.section_heading || "";
 
   let banner_url = null;
   if (req.file) {
@@ -128,6 +129,7 @@ const createCardBanner = asyncHandler(async (req, res) => {
 
   const result = await CardBannerService.createCardBanner({
     banner_url,
+    heading: bannerHeading,
     title,
     text,
     products: productIds,
@@ -156,10 +158,13 @@ const updateCardBanner = asyncHandler(async (req, res) => {
     );
   }
 
-  const { text, is_card, is_banner, order, is_active } = req.body;
+  const { heading, text, is_card, is_banner, order, is_active } = req.body;
   const data = {};
 
-  const title = req.body.title ?? req.body.section_title ?? req.body.banner_title ?? req.body.heading;
+  const bannerHeading = heading !== undefined ? heading : req.body.section_heading;
+  if (bannerHeading !== undefined) data.heading = bannerHeading;
+
+  const title = req.body.title ?? req.body.section_title ?? req.body.banner_title;
   if (title !== undefined) data.title = title;
   if (text !== undefined) data.text = text;
   if (order !== undefined) data.order = Number(order);
@@ -209,6 +214,14 @@ const updateCardBanner = asyncHandler(async (req, res) => {
   );
 });
 
+const updateAllHeading = asyncHandler(async (req, res) => {
+  const heading = req.body.heading !== undefined ? req.body.heading : (req.body.section_heading || "");
+  const result = await CardBannerService.updateAllHeading(heading);
+  res.json(
+    new ApiResponse(200, result, "All card banners heading updated successfully", true)
+  );
+});
+
 const deleteCardBanner = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -236,5 +249,6 @@ module.exports = {
   getCardBannerById,
   createCardBanner,
   updateCardBanner,
+  updateAllHeading,
   deleteCardBanner,
 };
