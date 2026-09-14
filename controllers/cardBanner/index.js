@@ -101,7 +101,8 @@ const getCardBannerById = asyncHandler(async (req, res) => {
 });
 
 const createCardBanner = asyncHandler(async (req, res) => {
-  const { text, title, is_card, is_banner, order, is_active } = req.body;
+  const { text, is_card, is_banner, order, is_active } = req.body;
+  const title = req.body.title || req.body.section_title || req.body.banner_title || req.body.heading || "";
 
   let banner_url = null;
   if (req.file) {
@@ -127,8 +128,8 @@ const createCardBanner = asyncHandler(async (req, res) => {
 
   const result = await CardBannerService.createCardBanner({
     banner_url,
-    text,
     title,
+    text,
     products: productIds,
     is_card,
     is_banner,
@@ -155,11 +156,12 @@ const updateCardBanner = asyncHandler(async (req, res) => {
     );
   }
 
-  const { text, title, is_card, is_banner, order, is_active } = req.body;
+  const { text, is_card, is_banner, order, is_active } = req.body;
   const data = {};
 
-  if (text !== undefined) data.text = text;
+  const title = req.body.title ?? req.body.section_title ?? req.body.banner_title ?? req.body.heading;
   if (title !== undefined) data.title = title;
+  if (text !== undefined) data.text = text;
   if (order !== undefined) data.order = Number(order);
   if (is_active !== undefined) {
     data.is_active = is_active === "true" || is_active === true;

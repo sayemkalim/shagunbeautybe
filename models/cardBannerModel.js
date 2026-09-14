@@ -2,19 +2,19 @@ const mongoose = require("mongoose");
 
 const CardBannerSchema = new mongoose.Schema(
   {
-    banner_url: {
+    title: {
       type: String,
-      required: true,
+      trim: true,
+      default: "",
     },
     text: {
       type: String,
       trim: true,
       default: "",
     },
-    title: {
+    banner_url: {
       type: String,
-      trim: true,
-      default: "",
+      required: true,
     },
     products: [
       {
