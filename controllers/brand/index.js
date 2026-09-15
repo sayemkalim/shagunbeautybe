@@ -99,9 +99,27 @@ const updateBrand = asyncHandler(async (req, res) => {
 
   let brandData = { ...req.body };
 
-  if (req.files) {
+  if (req.files && req.files.length > 0) {
     const imageUrls = await uploadMultipleFiles(req.files, "uploads/images");
     brandData.images = imageUrls;
+  } else if (req.body.images !== undefined) {
+    if (req.body.images === "" || req.body.images === "null" || req.body.images === null) {
+      brandData.images = [];
+    } else {
+      let imagesArr = req.body.images;
+      if (typeof imagesArr === "string") {
+        try {
+          imagesArr = JSON.parse(imagesArr);
+        } catch {
+          imagesArr = [imagesArr];
+        }
+      }
+      brandData.images = Array.isArray(imagesArr)
+        ? imagesArr.filter((img) => typeof img === "string" && img.startsWith("http"))
+        : [];
+    }
+  } else {
+    delete brandData.images;
   }
 
   if (brandData?.meta_data) {
