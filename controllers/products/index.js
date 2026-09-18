@@ -130,13 +130,12 @@ const getAllProducts = asyncHandler(async (req, res) => {
 
     products.data = products.data.map((product) => {
       const prodIdStr = product._id ? product._id.toString() : "";
-      const available_inventory = inventoryMap.has(prodIdStr)
+      const baseAvailable = inventoryMap.has(prodIdStr)
         ? inventoryMap.get(prodIdStr)
-        : 0;
+        : (product.inventory || 0);
 
       const convertedProduct = {
         ...product,
-        available_inventory,
         sku: product.sku,
         price:
           product.price &&
@@ -158,13 +157,17 @@ const getAllProducts = asyncHandler(async (req, res) => {
       };
 
       // Handle variants
-      if (Array.isArray(convertedProduct.variants)) {
+      let totalVariantStock = 0;
+      let hasVariants = false;
+      if (Array.isArray(convertedProduct.variants) && convertedProduct.variants.length > 0) {
+        hasVariants = true;
         convertedProduct.variants = convertedProduct.variants.map(
           (variant) => {
             const vKey = `${prodIdStr}_${variant.sku}`;
             const variantAvailable = variantInventoryMap.has(vKey)
               ? variantInventoryMap.get(vKey)
-              : 0;
+              : (variant.available_inventory !== undefined ? variant.available_inventory : (variant.inventory || 0));
+            totalVariantStock += variantAvailable;
 
             return {
               ...variant,
@@ -190,6 +193,11 @@ const getAllProducts = asyncHandler(async (req, res) => {
         });
       }
 
+      convertedProduct.base_available_inventory = baseAvailable;
+      convertedProduct.available_inventory = hasVariants
+        ? (baseAvailable + totalVariantStock)
+        : baseAvailable;
+
       return convertedProduct;
     });
   }
@@ -211,15 +219,44 @@ const getProductById = asyncHandler(async (req, res) => {
     return res.json(new ApiResponse(404, null, "Product not found", false));
   }
 
-  const inventoryRecord = await Inventory.findOne({
-    product: id,
-    variant_sku: null,
-  }).lean();
-  const available_inventory = inventoryRecord
-    ? Math.max(inventoryRecord.quantity_on_hand - inventoryRecord.reserved_quantity, 0)
-    : 0;
+  const inventoryRecords = await Inventory.find({ product: id }).lean();
+  let baseAvailable = 0;
+  const variantStockMap = new Map();
+  let totalVariantStock = 0;
 
-  const productData = { ...product.toJSON(), available_inventory };
+  inventoryRecords.forEach((inv) => {
+    const avail = Math.max((inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0), 0);
+    if (inv.variant_sku) {
+      variantStockMap.set(inv.variant_sku, avail);
+      totalVariantStock += avail;
+    } else {
+      baseAvailable = avail;
+    }
+  });
+
+  const productObj = product.toJSON();
+  const hasVariants = Array.isArray(productObj.variants) && productObj.variants.length > 0;
+  if (hasVariants) {
+    productObj.variants = productObj.variants.map((v) => {
+      const vAvail = variantStockMap.has(v.sku)
+        ? variantStockMap.get(v.sku)
+        : (v.available_inventory !== undefined ? v.available_inventory : (v.inventory || 0));
+      return {
+        ...v,
+        available_inventory: vAvail,
+      };
+    });
+  }
+
+  const available_inventory = hasVariants
+    ? (baseAvailable + totalVariantStock)
+    : baseAvailable;
+
+  const productData = {
+    ...productObj,
+    available_inventory,
+    base_available_inventory: baseAvailable,
+  };
 
   res.json(new ApiResponse(200, productData, "Product fetched successfully", true));
 });
