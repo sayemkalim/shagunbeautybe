@@ -3,6 +3,7 @@ const ApiResponse = require("../../utils/ApiResponse.js");
 const CartService = require("../../services/cart/index.js");
 const CouponService = require("../../services/coupon/index.js");
 const { calculateShippingCost } = require("../../utils/shipping/calculateShipping.js");
+const Inventory = require("../../models/inventoryModel.js");
 
 const getCart = asyncHandler(async (req, res) => {
   const user_id = req.user?._id;
@@ -59,6 +60,48 @@ const getCart = asyncHandler(async (req, res) => {
     coupon_discount_amount: couponDiscountAmount,
     final_price: finalPrice,
   };
+
+  if (cartWithPricing && Array.isArray(cartWithPricing.items) && cartWithPricing.items.length > 0) {
+    const productIds = cartWithPricing.items
+      .filter((i) => i.product)
+      .map((i) => (i.product._id ? i.product._id : i.product));
+
+    const inventoryRecords = await Inventory.find({
+      product: { $in: productIds },
+    }).lean();
+
+    const inventoryMap = new Map();
+    const variantInventoryMap = new Map();
+
+    inventoryRecords.forEach((inv) => {
+      const avail = Math.max(inv.quantity_on_hand - inv.reserved_quantity, 0);
+      if (inv.variant_sku) {
+        variantInventoryMap.set(`${inv.product.toString()}_${inv.variant_sku}`, avail);
+      } else {
+        inventoryMap.set(inv.product.toString(), avail);
+      }
+    });
+
+    cartWithPricing.items = cartWithPricing.items.map((item) => {
+      const pId = item.product?._id ? item.product._id.toString() : item.product?.toString();
+      let avail = 0;
+      if (item.variant_sku) {
+        const vKey = `${pId}_${item.variant_sku}`;
+        avail = variantInventoryMap.has(vKey)
+          ? variantInventoryMap.get(vKey)
+          : (inventoryMap.has(pId) ? inventoryMap.get(pId) : 0);
+      } else {
+        avail = inventoryMap.has(pId) ? inventoryMap.get(pId) : 0;
+      }
+      return {
+        ...item,
+        available_inventory: avail,
+        product: item.product && typeof item.product === "object"
+          ? { ...item.product, available_inventory: avail }
+          : item.product,
+      };
+    });
+  }
 
   const data = {
     data: cartWithPricing,
