@@ -25,6 +25,7 @@ const {
   generateCompanyOrderUpdate,
 } = require("../../utils/email/templates/orderConfirmation");
 const Admin = require("../../models/adminModel");
+const Inventory = require("../../models/inventoryModel");
 const razorpay = require("../../config/razorpay");
 const InventoryService = require("../../services/inventory/index.js");
 const CouponService = require("../../services/coupon/index.js");
@@ -674,7 +675,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
 
 const createOrder = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { cartId, addressId, couponCode, paymentMode, utr_number } = req.body;
+  const { cartId, addressId, couponCode, paymentMode, utr_number, selectedItemIds } = req.body;
 
   if (!["COD", "UPI"].includes(paymentMode)) {
     return res
@@ -704,14 +705,59 @@ const createOrder = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, "Address not found", false));
   }
 
+  const hasSelectedFilter = Array.isArray(selectedItemIds) && selectedItemIds.length > 0;
+  const selectedSet = hasSelectedFilter ? new Set(selectedItemIds.map(String)) : null;
+
   let totalAmount = 0;
   let discountedTotalAmount = 0;
   let totalWeightGrams = 0;
   const orderItems = [];
+  const processedCartItemIds = [];
+
   for (const cartItem of cart.items) {
+    const pIdStr = cartItem.product ? cartItem.product.toString() : "";
+    const bIdStr = cartItem.bundle ? cartItem.bundle.toString() : "";
+    const vSku = cartItem.variant_sku || "base";
+    const itemIdStr = cartItem._id ? cartItem._id.toString() : "";
+    const itemCompositeKey = `${pIdStr || bIdStr}_${vSku}`;
+
+    if (selectedSet) {
+      const isSelected =
+        selectedSet.has(itemIdStr) ||
+        selectedSet.has(itemCompositeKey) ||
+        selectedSet.has(pIdStr) ||
+        selectedSet.has(bIdStr);
+      if (!isSelected) {
+        continue;
+      }
+    }
+
     if (cartItem.type === "product") {
       const product = await Product.findById(cartItem.product);
       if (!product) continue;
+
+      // Live inventory check to ensure out of stock items are never ordered
+      const invQuery = { product: cartItem.product };
+      if (cartItem.variant_sku) {
+        invQuery.variant_sku = cartItem.variant_sku;
+      }
+      const inv = await Inventory.findOne(invQuery).lean();
+      let availableStock = 0;
+      if (inv) {
+        availableStock = Math.max((inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0), 0);
+      } else {
+        const vObj = cartItem.variant_sku && Array.isArray(product.variants)
+          ? product.variants.find((v) => v.sku === cartItem.variant_sku || v._id?.toString() === cartItem.variant_sku)
+          : null;
+        availableStock = vObj
+          ? (typeof vObj.available_inventory === "number" ? vObj.available_inventory : (vObj.inventory || 0))
+          : (typeof product.available_inventory === "number" ? product.available_inventory : (product.inventory || 0));
+      }
+
+      if (availableStock <= 0) {
+        console.log(`[createOrder] Skipping out-of-stock product ${product.name} (available: ${availableStock})`);
+        continue;
+      }
 
       const { orderItem, itemTotal, discountedItemTotal, weightTotal } = resolveProductOrderItem(
         product,
@@ -722,6 +768,7 @@ const createOrder = asyncHandler(async (req, res) => {
       discountedTotalAmount += discountedItemTotal;
       totalWeightGrams += weightTotal;
       orderItems.push(orderItem);
+      if (cartItem._id) processedCartItemIds.push(cartItem._id.toString());
     } else if (cartItem.type === "bundle") {
       const bundle = await Bundle.findById(cartItem.bundle);
       if (!bundle) continue;
@@ -734,7 +781,6 @@ const createOrder = asyncHandler(async (req, res) => {
       totalAmount += itemTotal;
       discountedTotalAmount += discountedItemTotal;
 
-      // Calculate weight for bundles - sum up all products in the bundle
       if (bundle.products && Array.isArray(bundle.products)) {
         for (const bundleProduct of bundle.products) {
           const product = await Product.findById(bundleProduct.product);
@@ -762,7 +808,21 @@ const createOrder = asyncHandler(async (req, res) => {
         total_amount: itemTotal,
         discounted_total_amount: discountedItemTotal,
       });
+      if (cartItem._id) processedCartItemIds.push(cartItem._id.toString());
     }
+  }
+
+  if (orderItems.length === 0) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "No available items to order. Selected item(s) are currently out of stock.",
+          false
+        )
+      );
   }
 
   const addressSnapshot = { ...address.toObject() };
@@ -837,7 +897,8 @@ const createOrder = asyncHandler(async (req, res) => {
     console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
   );
 
-  cart.items = [];
+  const orderedIdsSet = new Set(processedCartItemIds);
+  cart.items = cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
   await cart.save();
 
   // Send order confirmation emails directly (async - won't block response)
