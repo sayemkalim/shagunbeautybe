@@ -109,11 +109,34 @@ const getAllProducts = asyncHandler(async (req, res) => {
     sort_by,
   });
 
-  // Convert Decimal128 to numbers for all products
+  // Convert Decimal128 to numbers for all products and attach available_inventory
   if (products.data && Array.isArray(products.data)) {
+    const productIds = products.data.map((p) => p._id);
+    const inventoryRecords = await Inventory.find({
+      product: { $in: productIds },
+    }).lean();
+
+    const inventoryMap = new Map();
+    const variantInventoryMap = new Map();
+
+    inventoryRecords.forEach((inv) => {
+      const avail = Math.max(inv.quantity_on_hand - inv.reserved_quantity, 0);
+      if (inv.variant_sku) {
+        variantInventoryMap.set(`${inv.product.toString()}_${inv.variant_sku}`, avail);
+      } else {
+        inventoryMap.set(inv.product.toString(), avail);
+      }
+    });
+
     products.data = products.data.map((product) => {
+      const prodIdStr = product._id ? product._id.toString() : "";
+      const available_inventory = inventoryMap.has(prodIdStr)
+        ? inventoryMap.get(prodIdStr)
+        : 0;
+
       const convertedProduct = {
         ...product,
+        available_inventory,
         sku: product.sku,
         price:
           product.price &&
@@ -137,8 +160,15 @@ const getAllProducts = asyncHandler(async (req, res) => {
       // Handle variants
       if (Array.isArray(convertedProduct.variants)) {
         convertedProduct.variants = convertedProduct.variants.map(
-          (variant) => ({
-            ...variant,
+          (variant) => {
+            const vKey = `${prodIdStr}_${variant.sku}`;
+            const variantAvailable = variantInventoryMap.has(vKey)
+              ? variantInventoryMap.get(vKey)
+              : 0;
+
+            return {
+              ...variant,
+              available_inventory: variantAvailable,
             price:
               variant.price &&
               typeof variant.price === "object" &&
@@ -156,8 +186,8 @@ const getAllProducts = asyncHandler(async (req, res) => {
                   typeof variant.discounted_price === "object"
                 ? parseFloat(variant.discounted_price.toString())
                 : variant.discounted_price,
-          })
-        );
+          };
+        });
       }
 
       return convertedProduct;
