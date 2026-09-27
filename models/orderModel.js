@@ -198,7 +198,7 @@ const OrderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled", "refunded"],
+    enum: ["pending", "confirmed", "processing", "shipped", "out_for_delivery", "delivered", "cancelled", "refunded"],
     default: "pending"
   },
   // Payment mode the customer chose at checkout — COD or prepaid via UPI or ONLINE.
@@ -237,9 +237,23 @@ const OrderSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  // Actual method reported by Razorpay once payment completes (e.g. "upi", "card", "netbanking") — distinct from paymentMode
+  // Actual method reported by Razorpay once payment completes (e.g. "upi", "card", "netbanking"), or at doorstep for COD ("cash", "upi")
   paymentMethod: {
     type: String,
+    default: null
+  },
+  // Doorstep payment collection method for COD orders ("cash" or "upi")
+  codPaymentMethod: {
+    type: String,
+    enum: ["cash", "upi", null],
+    default: null
+  },
+  outForDeliveryAt: {
+    type: Date,
+    default: null
+  },
+  deliveredAt: {
+    type: Date,
     default: null
   },
   refundId: {

@@ -1061,7 +1061,7 @@ const getOrderHistory = asyncHandler(async (req, res) => {
 
 const updateOrderStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const { status, codPaymentMethod, paymentMethod, paymentStatus } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res
@@ -1075,17 +1075,21 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, "Status is required", false));
   }
 
+  const normalizedStatus =
+    status === "out for delivery" ? "out_for_delivery" : status;
+
   // Validate status values
   const validStatuses = [
     "pending",
     "confirmed",
     "processing",
     "shipped",
+    "out_for_delivery",
     "delivered",
     "cancelled",
     "refunded",
   ];
-  if (!validStatuses.includes(status)) {
+  if (!validStatuses.includes(normalizedStatus)) {
     return res
       .status(400)
       .json(
@@ -1106,8 +1110,45 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   }
 
   const previousStatus = order.status;
-  order.status = status;
-  if (status === "refunded") {
+  order.status = normalizedStatus;
+
+  if (normalizedStatus === "out_for_delivery" && !order.outForDeliveryAt) {
+    order.outForDeliveryAt = new Date();
+  }
+
+  if (normalizedStatus === "delivered" && !order.deliveredAt) {
+    order.deliveredAt = new Date();
+  }
+
+  // Handle COD payment collection at doorstep: Paid by Cash or UPI
+  const selectedCodMethod = codPaymentMethod || paymentMethod;
+  if (selectedCodMethod) {
+    const normMethod =
+      String(selectedCodMethod).toLowerCase().includes("upi") ? "upi" : "cash";
+    order.codPaymentMethod = normMethod;
+    order.paymentMethod = normMethod;
+    order.paymentStatus = "paid";
+    order.paidAt = order.paidAt || new Date();
+  } else if (normalizedStatus === "delivered" && order.paymentMode === "COD") {
+    if (paymentStatus === "paid" || req.body.paid) {
+      order.paymentStatus = "paid";
+      order.codPaymentMethod = order.codPaymentMethod || "cash";
+      order.paymentMethod = order.paymentMethod || "cash";
+      order.paidAt = order.paidAt || new Date();
+    }
+  }
+
+  if (
+    paymentStatus &&
+    ["pending", "paid", "failed", "cancelled", "refunded"].includes(paymentStatus)
+  ) {
+    order.paymentStatus = paymentStatus;
+    if (paymentStatus === "paid" && !order.paidAt) {
+      order.paidAt = new Date();
+    }
+  }
+
+  if (normalizedStatus === "refunded") {
     order.paymentStatus = "refunded";
     order.refundStatus = "processed";
     order.refundedAt = new Date();
@@ -1210,17 +1251,21 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, "Status is required", false));
   }
 
+  const normalizedStatus =
+    status === "out for delivery" ? "out_for_delivery" : status;
+
   // Validate status values
   const validStatuses = [
     "pending",
     "confirmed",
     "processing",
     "shipped",
+    "out_for_delivery",
     "delivered",
     "cancelled",
     "refunded",
   ];
-  if (!validStatuses.includes(status)) {
+  if (!validStatuses.includes(normalizedStatus)) {
     return res
       .status(400)
       .json(
@@ -1264,8 +1309,16 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
       }
 
       const previousStatus = order.status;
-      order.status = status;
-      if (status === "refunded") {
+      order.status = normalizedStatus;
+
+      if (normalizedStatus === "out_for_delivery" && !order.outForDeliveryAt) {
+        order.outForDeliveryAt = new Date();
+      }
+      if (normalizedStatus === "delivered" && !order.deliveredAt) {
+        order.deliveredAt = new Date();
+      }
+
+      if (normalizedStatus === "refunded") {
         order.paymentStatus = "refunded";
         order.refundStatus = "processed";
         order.refundedAt = new Date();
@@ -1652,7 +1705,7 @@ const cancelOrder = asyncHandler(async (req, res) => {
       .json(new ApiResponse(404, null, "Order not found", false));
   }
 
-  const cancellableStatuses = ["pending", "confirmed", "processing", "shipped", "delivered"];
+  const cancellableStatuses = ["pending", "confirmed", "processing", "shipped", "out_for_delivery", "delivered"];
   if (!cancellableStatuses.includes(order.status)) {
     return res
       .status(400)
@@ -1733,12 +1786,15 @@ const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
         "confirmed",
         "processing",
         "shipped",
+        "out_for_delivery",
         "delivered",
         "cancelled",
         "refunded",
       ];
-      if (validStatuses.includes(status)) {
-        orderQuery.status = status;
+      const normStatus =
+        status === "out for delivery" ? "out_for_delivery" : status;
+      if (validStatuses.includes(normStatus)) {
+        orderQuery.status = normStatus;
       }
     }
 
@@ -1960,18 +2016,30 @@ const updateOrder = asyncHandler(async (req, res) => {
         "confirmed",
         "processing",
         "shipped",
+        "out_for_delivery",
         "delivered",
         "cancelled",
         "refunded",
       ];
 
-      if (!validStatuses.includes(updateData.status)) {
+      const normStatus =
+        updateData.status === "out for delivery"
+          ? "out_for_delivery"
+          : updateData.status;
+
+      if (!validStatuses.includes(normStatus)) {
         return res
           .status(400)
           .json(new ApiResponse(400, null, "Invalid status", false));
       }
 
-      order.status = updateData.status;
+      order.status = normStatus;
+      if (normStatus === "out_for_delivery" && !order.outForDeliveryAt) {
+        order.outForDeliveryAt = new Date();
+      }
+      if (normStatus === "delivered" && !order.deliveredAt) {
+        order.deliveredAt = new Date();
+      }
     }
 
     if (updateData.addressId) {
@@ -2450,6 +2518,15 @@ const updateOrder = asyncHandler(async (req, res) => {
     }
     if (updateData.utr_number !== undefined) {
       order.utr_number = updateData.utr_number;
+    }
+    if (updateData.codPaymentMethod || updateData.paymentMethod) {
+      const selected = updateData.codPaymentMethod || updateData.paymentMethod;
+      const normCod =
+        String(selected).toLowerCase().includes("upi") ? "upi" : "cash";
+      order.codPaymentMethod = normCod;
+      order.paymentMethod = normCod;
+      order.paymentStatus = "paid";
+      order.paidAt = order.paidAt || new Date();
     }
 
     await order.save();

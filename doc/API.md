@@ -1641,19 +1641,28 @@ Admin general-purpose order editor: change status, replace address, add/adjust/r
 
 ### PATCH /api/order/:id/status
 
-Change a single order's status (simpler than the full editor above); notifies the customer by email.
+Change a single order's status; notifies the customer by email.
+Supports marking COD doorstep payments as **Paid by Cash** or **Paid by UPI**.
 
 **Auth**: `Authorization: Bearer <admin JWT>` — `adminOrSuperAdmin`.
 
 **Path params**: `id` (ObjectId, required).
 
-**Request body**: `{ "status": "pending|confirmed|processing|shipped|delivered|cancelled (required)" }`
+**Request body**:
+```json
+{
+  "status": "pending|confirmed|processing|shipped|out_for_delivery|delivered|cancelled|refunded (required)",
+  "codPaymentMethod": "cash|upi (optional, doorstep collection method for COD orders)",
+  "paymentMethod": "cash|upi (optional, alias for codPaymentMethod)",
+  "paymentStatus": "pending|paid (optional, set automatically to paid when codPaymentMethod is provided)"
+}
+```
 
 **Success response** `200`: `{ "data": <updated order doc>, "message": "Order status updated successfully" }`
 
 **Errors**: `400 {"message":"Invalid order ID"}`, `400 {"message":"Status is required"}`, `400 {"message":"Invalid status. Must be one of: ..."}`, `404 {"message":"Order not found"}`.
 
-**Notable**: Appends a new `emailTracking.statusUpdates` entry, then asynchronously (via `setImmediate`) emails the customer — reuses the order-**confirmation** email template rather than a dedicated status-update template (likely unintentional). Does not notify admins (unlike `bulk-status`, which does).
+**Notable**: Appends a new `emailTracking.statusUpdates` entry, then emails the customer. Automatically tracks `outForDeliveryAt` and `deliveredAt` timestamps. If `codPaymentMethod` is provided on a COD order, updates `order.paymentStatus = "paid"`, `order.codPaymentMethod`, and `order.paidAt`.
 
 ---
 
