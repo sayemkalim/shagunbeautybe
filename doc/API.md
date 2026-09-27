@@ -1756,29 +1756,47 @@ Fetch public Razorpay client configuration (Key ID and enabled status).
 
 ### POST /api/order/razorpay/create-order
 
-Create a Razorpay Order for Standard Checkout popup payment.
+Create a Razorpay Order for Standard Checkout popup payment. Supports both:
+1. **Direct Cart Checkout (Recommended - Option 1)**: Accepts `cartId`, `addressId`, `couponCode` (optional), and `selectedItemIds` (optional). Does **not** insert an order into MongoDB, does not deduct inventory, and does not clear cart until payment verification.
+2. **Pre-existing Order**: Accepts `orderId` (e.g. for retrying payment on an existing pending order).
 
 **Auth**: `Authorization: Bearer <user JWT>` (optional for guest orders) — `optionalUser`.
 
-**Request body**: `{ "orderId": "ObjectId (required)" }`
+**Request body**:
+Option 1 (Cart Checkout - Recommended):
+```json
+{
+  "cartId": "651234567890abcdef123456",
+  "addressId": "651234567890abcdef654321",
+  "couponCode": "DISCOUNT10",
+  "selectedItemIds": ["item_id_1"]
+}
+```
+Option 2 (Existing Order Retry):
+```json
+{
+  "orderId": "651234567890abcdef123456"
+}
+```
 
 **Success response** `200`:
 ```json
 {
   "statusCode": 200,
   "data": {
-    "orderId": "651234567890abcdef123456",
+    "orderId": null,
     "razorpayOrderId": "order_EKwxwAgItmmXdp",
     "amount": 99900,
     "currency": "INR",
     "keyId": "rzp_test_...",
+    "finalTotalAmount": 999,
     "customer": {
       "name": "Customer Name",
       "contact": "9876543210",
       "email": "user@example.com"
     }
   },
-  "message": "Razorpay order created successfully",
+  "message": "Razorpay checkout order created successfully (no order placed yet)",
   "success": true
 }
 ```
@@ -1788,10 +1806,25 @@ Create a Razorpay Order for Standard Checkout popup payment.
 ### POST /api/order/razorpay/verify-payment
 
 Verify HMAC SHA256 payment signature after Razorpay popup completes on frontend (Web or React Native).
+- For Direct Cart Checkout (Option 1): Upon successful signature verification, automatically inserts the confirmed Order into MongoDB, applies coupon usage, deducts inventory, clears purchased items from the cart, generates invoice PDF, and dispatches confirmation emails.
+- For Pre-existing Order: Updates `paymentStatus` to `"paid"` and `status` to `"confirmed"`.
 
 **Auth**: `Authorization: Bearer <user JWT>` (optional for guest orders) — `optionalUser`.
 
 **Request body**:
+Option 1 (Cart Checkout - Recommended):
+```json
+{
+  "cartId": "651234567890abcdef123456",
+  "addressId": "651234567890abcdef654321",
+  "couponCode": "DISCOUNT10",
+  "selectedItemIds": ["item_id_1"],
+  "razorpay_order_id": "order_EKwxwAgItmmXdp",
+  "razorpay_payment_id": "pay_29QQoUBi66xm2f",
+  "razorpay_signature": "9ef4dffbfd84f1318f6739a3ce19f9d85851857ae648f114332d8401e0949a3d"
+}
+```
+Option 2 (Existing Order Retry):
 ```json
 {
   "orderId": "651234567890abcdef123456",
@@ -1806,7 +1839,41 @@ Verify HMAC SHA256 payment signature after Razorpay popup completes on frontend 
 {
   "statusCode": 200,
   "data": { ...order },
-  "message": "Payment verified and order confirmed successfully",
+  "message": "Payment verified and order created successfully",
+  "success": true
+}
+```
+
+---
+
+### POST /api/order/:id/refund
+
+Process an online refund for a paid order via Razorpay and update order/payment status to `"refunded"`.
+
+**Auth**: `Authorization: Bearer <admin/super_admin JWT>`.
+
+**Request body** (optional):
+```json
+{
+  "amount": 999.00,
+  "reason": "Customer cancellation / return request"
+}
+```
+*(If `amount` is omitted, the full `order.finalTotalAmount` is refunded).*
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "order": { ...order, "status": "refunded", "paymentStatus": "refunded" },
+    "refund": {
+      "id": "rfnd_...",
+      "amount": 99900,
+      "status": "processed"
+    }
+  },
+  "message": "Order refunded successfully",
   "success": true
 }
 ```
@@ -2264,7 +2331,7 @@ Razorpay payment webhook receiver — updates order payment status when Razorpay
 |---|---|---|
 | x-razorpay-signature | Yes | HMAC-SHA256 signature of the raw JSON body buffer, computed with `RAZORPAY_WEBHOOK_SECRET` |
 
-**Request body**: Razorpay webhook event payload (JSON) — shape defined by Razorpay, notably `event` (`"payment.captured"`, `"order.paid"`, `"payment_link.paid"`, `"payment.failed"`) and `payload.payment.entity`, `payload.order.entity`, and/or `payload.payment_link.entity`.
+**Request body**: Razorpay webhook event payload (JSON) — shape defined by Razorpay, notably `event` (`"payment.captured"`, `"order.paid"`, `"payment_link.paid"`, `"payment.failed"`, `"refund.processed"`, `"refund.created"`, `"payment.refunded"`) and `payload.payment.entity`, `payload.order.entity`, `payload.refund.entity`, and/or `payload.payment_link.entity`.
 
 **Success response** `200`: `{ "status": "success" }` (not wrapped in `ApiResponse`) — returned even if the event type is unhandled or the referenced order can't be found (those cases are only logged, not surfaced as errors, since Razorpay expects a `200` to stop retrying).
 
@@ -2280,6 +2347,7 @@ Razorpay payment webhook receiver — updates order payment status when Razorpay
 - Sets `paymentStatus: "paid"`, `paymentMode: "ONLINE"`, `paymentId`, `paymentMethod`, `paidAt`, and transitions `status` from `"pending"` to `"confirmed"`.
 - Automatically triggers invoice PDF bill generation (`ensureOrderBillGenerated`).
 - On `payment.failed`, sets `paymentStatus: "failed"` if the order is not already marked paid.
+- On `refund.processed`, `refund.created`, or `payment.refunded`, sets `status: "refunded"`, `paymentStatus: "refunded"`, records `refundId`, `refundAmount`, `refundedAt`, and automatically restores product inventory and releases coupon usage.
 
 ---
 

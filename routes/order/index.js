@@ -32,5 +32,6 @@ router.post("/generate-payment-link", adminOrSuperAdmin, OrderController.generat
 router.get("/razorpay/config", OrderController.getRazorpayConfig);
 router.post("/razorpay/create-order", optionalUser, OrderController.createRazorpayOrder);
 router.post("/razorpay/verify-payment", optionalUser, OrderController.verifyRazorpayPayment);
+router.post("/:id/refund", adminOrSuperAdmin, OrderController.refundOrder);
 
 module.exports = router;

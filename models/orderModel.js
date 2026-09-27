@@ -198,10 +198,10 @@ const OrderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"],
+    enum: ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled", "refunded"],
     default: "pending"
   },
-  // Payment mode the customer chose at checkout — COD or prepaid via UPI.
+  // Payment mode the customer chose at checkout — COD or prepaid via UPI or ONLINE.
   // Not schema-required: full-document validation reruns on every save (including
   // unrelated admin updates to older orders), so enforcement lives in the
   // createOrder/createGuestOrder controllers instead of here.
@@ -230,7 +230,7 @@ const OrderSchema = new mongoose.Schema({
   },
   paymentStatus: {
     type: String,
-    enum: ["pending", "paid", "failed", "cancelled"],
+    enum: ["pending", "paid", "failed", "cancelled", "refunded", "partially_refunded"],
     default: "pending"
   },
   paymentId: {
@@ -240,6 +240,23 @@ const OrderSchema = new mongoose.Schema({
   // Actual method reported by Razorpay once payment completes (e.g. "upi", "card", "netbanking") — distinct from paymentMode
   paymentMethod: {
     type: String,
+    default: null
+  },
+  refundId: {
+    type: String,
+    default: null
+  },
+  refundAmount: {
+    type: Number,
+    default: 0
+  },
+  refundStatus: {
+    type: String,
+    enum: [null, "pending", "processed", "failed"],
+    default: null
+  },
+  refundedAt: {
+    type: Date,
     default: null
   },
   paidAt: {

@@ -678,47 +678,113 @@ const createGuestOrder = asyncHandler(async (req, res) => {
     );
 });
 
-const createOrder = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-  const { cartId, addressId, couponCode, paymentMode, utr_number, selectedItemIds } = req.body;
+const sendOrderNotificationEmailsAsync = async (order, user) => {
+  // Mark email as queued initially
+  order.emailTracking = {
+    confirmation: {
+      status: "queued",
+      queuedAt: new Date(),
+      attempts: 0,
+    },
+    statusUpdates: [],
+  };
+  await order.save();
 
-  if (!["COD", "UPI", "ONLINE"].includes(paymentMode)) {
-    return res
-      .status(400)
-      .json(
-        new ApiResponse(
-          400,
-          null,
-          "paymentMode must be 'COD', 'UPI', or 'ONLINE'",
-          false,
-        ),
+  // Send emails asynchronously (non-blocking)
+  (async () => {
+    try {
+      if (user && user.email) {
+        const customerHtmlContent = generateCustomerOrderConfirmation(
+          order.toObject(),
+          user.toObject ? user.toObject() : user,
+        );
+
+        const customerEmailOptions = {
+          to: user.email,
+          subject: `Order Received - ${order._id}`,
+          html: customerHtmlContent,
+        };
+
+        const customerEmailSent = await sendEmail(customerEmailOptions);
+
+        if (customerEmailSent.success) {
+          console.log(
+            "✅ Order confirmation email sent successfully to customer",
+          );
+          order.emailTracking.confirmation.status = "sent";
+          order.emailTracking.confirmation.sentAt = new Date();
+          await order.save();
+        }
+      }
+
+      // Send admin email
+      const admins = await Admin.find({
+        role: { $in: ["super_admin"] },
+      }).select("email");
+
+      const adminEmails = admins.map((admin) => admin.email).filter(Boolean);
+
+      if (adminEmails.length > 0) {
+        const adminHtmlContent = generateCompanyOrderNotification(
+          order.toObject(),
+          user.toObject ? user.toObject() : user,
+        );
+        const adminEmailOptions = {
+          to: "info@shagunbeauty.com",
+          subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
+          html: adminHtmlContent,
+        };
+
+        const adminEmailSent = await sendEmail(adminEmailOptions);
+
+        if (adminEmailSent.success) {
+          console.log("✅ New order notification sent successfully to admin");
+        } else {
+          console.error("❌ Failed to send new order notification to admin");
+        }
+      }
+    } catch (error) {
+      console.error(
+        "❌ Failed to send order confirmation email:",
+        error.message,
       );
-  }
+      order.emailTracking.confirmation.status = "failed";
+      order.emailTracking.confirmation.failedAt = new Date();
+      order.emailTracking.confirmation.error = error.message;
+      await order.save();
+    }
+  })();
+};
 
+const prepareCartOrderData = async ({
+  userId,
+  cartId,
+  addressId,
+  couponCode,
+  selectedItemIds,
+}) => {
   if (
     !mongoose.Types.ObjectId.isValid(cartId) ||
     !mongoose.Types.ObjectId.isValid(addressId)
   ) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Invalid cart or address ID", false));
+    throw new Error("Invalid cart or address ID");
   }
 
   const cart = await Cart.findOne({ _id: cartId, user: userId });
   if (!cart || cart.items.length === 0) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Cart not found or empty", false));
-  }
-  const address = await Address.findOne({ _id: addressId, user: userId });
-  if (!address) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Address not found", false));
+    throw new Error("Cart not found or empty");
   }
 
-  const hasSelectedFilter = Array.isArray(selectedItemIds) && selectedItemIds.length > 0;
-  const selectedSet = hasSelectedFilter ? new Set(selectedItemIds.map(String)) : null;
+  const address = await Address.findOne({ _id: addressId, user: userId });
+  if (!address) {
+    throw new Error("Address not found");
+  }
+
+  const hasSelectedFilter =
+    Array.isArray(selectedItemIds) && selectedItemIds.length > 0;
+  const selectedSet = hasSelectedFilter
+    ? new Set(selectedItemIds.map(String))
+    : null;
 
   let totalAmount = 0;
   let discountedTotalAmount = 0;
@@ -756,26 +822,41 @@ const createOrder = asyncHandler(async (req, res) => {
       const inv = await Inventory.findOne(invQuery).lean();
       let availableStock = 0;
       if (inv) {
-        availableStock = Math.max((inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0), 0);
+        availableStock = Math.max(
+          (inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0),
+          0,
+        );
       } else {
-        const vObj = cartItem.variant_sku && Array.isArray(product.variants)
-          ? product.variants.find((v) => v.sku === cartItem.variant_sku || v._id?.toString() === cartItem.variant_sku)
-          : null;
+        const vObj =
+          cartItem.variant_sku && Array.isArray(product.variants)
+            ? product.variants.find(
+                (v) =>
+                  v.sku === cartItem.variant_sku ||
+                  v._id?.toString() === cartItem.variant_sku,
+              )
+            : null;
         availableStock = vObj
-          ? (typeof vObj.available_inventory === "number" ? vObj.available_inventory : (vObj.inventory || 0))
-          : (typeof product.available_inventory === "number" ? product.available_inventory : (product.inventory || 0));
+          ? typeof vObj.available_inventory === "number"
+            ? vObj.available_inventory
+            : vObj.inventory || 0
+          : typeof product.available_inventory === "number"
+            ? product.available_inventory
+            : product.inventory || 0;
       }
 
       if (availableStock <= 0) {
-        console.log(`[createOrder] Skipping out-of-stock product ${product.name} (available: ${availableStock})`);
+        console.log(
+          `[prepareCartOrderData] Skipping out-of-stock product ${product.name} (available: ${availableStock})`,
+        );
         continue;
       }
 
-      const { orderItem, itemTotal, discountedItemTotal, weightTotal } = resolveProductOrderItem(
-        product,
-        cartItem.quantity,
-        cartItem.variant_sku
-      );
+      const { orderItem, itemTotal, discountedItemTotal, weightTotal } =
+        resolveProductOrderItem(
+          product,
+          cartItem.quantity,
+          cartItem.variant_sku,
+        );
       totalAmount += itemTotal;
       discountedTotalAmount += discountedItemTotal;
       totalWeightGrams += weightTotal;
@@ -825,16 +906,9 @@ const createOrder = asyncHandler(async (req, res) => {
   }
 
   if (orderItems.length === 0) {
-    return res
-      .status(400)
-      .json(
-        new ApiResponse(
-          400,
-          null,
-          "No available items to order. Selected item(s) are currently out of stock.",
-          false
-        )
-      );
+    throw new Error(
+      "No available items to order. Selected item(s) are currently out of stock.",
+    );
   }
 
   const addressSnapshot = { ...address.toObject() };
@@ -844,7 +918,6 @@ const createOrder = asyncHandler(async (req, res) => {
   delete addressSnapshot.updatedAt;
   delete addressSnapshot.__v;
 
-  // Validate and apply coupon against the discounted item total (pre-shipping)
   let couponResult = null;
   let couponDiscountAmount = 0;
   if (couponCode) {
@@ -855,36 +928,80 @@ const createOrder = asyncHandler(async (req, res) => {
     });
 
     if (!couponResult.success) {
-      return res
-        .status(400)
-        .json(new ApiResponse(400, null, couponResult.message, false));
+      throw new Error(couponResult.message || "Invalid coupon code");
     }
 
     couponDiscountAmount = couponResult.discount_amount;
   }
 
-  // Orders under ₹2000 incur a flat ₹50 shipping charge.
-  // This creates a snapshot of the shipping cost at order time
   const { shippingCost, shippingDetails } = await calculateShippingCost(
     discountedTotalAmount,
   );
 
-  // Calculate final total amount (discounted total - coupon discount + shipping)
   const finalTotalAmount =
     discountedTotalAmount - couponDiscountAmount + shippingCost;
 
-  const order = new Order({
-    user: userId,
-    items: orderItems,
-    address: addressSnapshot,
+  return {
+    cart,
+    address,
+    addressSnapshot,
+    orderItems,
+    processedCartItemIds,
     totalAmount,
     discountedTotalAmount,
+    totalWeightGrams,
+    couponResult,
+    couponDiscountAmount,
     shippingCost,
     shippingDetails,
-    coupon: couponResult ? couponResult.coupon._id : null,
-    couponCode: couponResult ? couponResult.coupon.code : null,
-    couponDiscountAmount,
     finalTotalAmount,
+  };
+};
+
+const createOrder = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { cartId, addressId, couponCode, paymentMode, utr_number, selectedItemIds } = req.body;
+
+  if (!["COD", "UPI", "ONLINE"].includes(paymentMode)) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "paymentMode must be 'COD', 'UPI', or 'ONLINE'",
+          false,
+        ),
+      );
+  }
+
+  let summary;
+  try {
+    summary = await prepareCartOrderData({
+      userId,
+      cartId,
+      addressId,
+      couponCode,
+      selectedItemIds,
+    });
+  } catch (err) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, err.message, false));
+  }
+
+  const order = new Order({
+    user: userId,
+    items: summary.orderItems,
+    address: summary.addressSnapshot,
+    totalAmount: summary.totalAmount,
+    discountedTotalAmount: summary.discountedTotalAmount,
+    shippingCost: summary.shippingCost,
+    shippingDetails: summary.shippingDetails,
+    coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
+    couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
+    couponDiscountAmount: summary.couponDiscountAmount,
+    finalTotalAmount: summary.finalTotalAmount,
     paymentMode,
     utr_number: utr_number || null,
     status: "pending",
@@ -892,13 +1009,13 @@ const createOrder = asyncHandler(async (req, res) => {
   await order.save();
 
   // Record coupon redemption (non-blocking best-effort, mirrors inventory deduction)
-  if (couponResult) {
+  if (summary.couponResult) {
     CouponService.applyCouponUsage({
-      couponId: couponResult.coupon._id,
+      couponId: summary.couponResult.coupon._id,
       userId,
       orderId: order._id,
-      discountAmount: couponDiscountAmount,
-      orderTotal: discountedTotalAmount,
+      discountAmount: summary.couponDiscountAmount,
+      orderTotal: summary.discountedTotalAmount,
     }).catch((error) =>
       console.error(`Coupon usage recording failed for order ${order._id}:`, error.message),
     );
@@ -909,89 +1026,15 @@ const createOrder = asyncHandler(async (req, res) => {
     console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
   );
 
-  const orderedIdsSet = new Set(processedCartItemIds);
-  cart.items = cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
-  await cart.save();
+  const orderedIdsSet = new Set(summary.processedCartItemIds);
+  summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
+  await summary.cart.save();
 
-  // Send order confirmation emails directly (async - won't block response)
+  // Send order confirmation emails
   const user = await User.findById(userId);
-
-  // Mark email as queued initially
-  order.emailTracking = {
-    confirmation: {
-      status: "queued",
-      queuedAt: new Date(),
-      attempts: 0,
-    },
-    statusUpdates: [],
-  };
-  await order.save();
-
-  // Send emails asynchronously (non-blocking)
-  (async () => {
-    try {
-      // Send customer email
-      const customerHtmlContent = generateCustomerOrderConfirmation(
-        order.toObject(),
-        user.toObject(),
-      );
-
-      const customerEmailOptions = {
-        to: user.email,
-        subject: `Order Received - ${order._id}`,
-        html: customerHtmlContent,
-      };
-
-      const customerEmailSent = await sendEmail(customerEmailOptions);
-
-      if (customerEmailSent.success) {
-        console.log(
-          "✅ Order confirmation email sent successfully to customer",
-        );
-        // Update email tracking status
-        order.emailTracking.confirmation.status = "sent";
-        order.emailTracking.confirmation.sentAt = new Date();
-        await order.save();
-      }
-
-      // Send admin email
-      const admins = await Admin.find({
-        role: { $in: ["super_admin"] },
-      }).select("email");
-
-      const adminEmails = admins.map((admin) => admin.email).filter(Boolean);
-
-      if (adminEmails.length > 0) {
-        const adminHtmlContent = generateCompanyOrderNotification(
-          order.toObject(),
-          user.toObject(),
-        );
-        const adminEmailOptions = {
-          to: "info@shagunbeauty.com", // Send to first admin (Brevo API handles single recipient)
-          subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
-          html: adminHtmlContent,
-        };
-
-        const adminEmailSent = await sendEmail(adminEmailOptions);
-
-        if (adminEmailSent.success) {
-          console.log("✅ New order notification sent successfully to admin");
-        } else {
-          console.error("❌ Failed to send new order notification to admin");
-        }
-      }
-    } catch (error) {
-      console.error(
-        "❌ Failed to send order confirmation email:",
-        error.message,
-      );
-      // Update email tracking status
-      order.emailTracking.confirmation.status = "failed";
-      order.emailTracking.confirmation.failedAt = new Date();
-      order.emailTracking.confirmation.error = error.message;
-      await order.save();
-    }
-  })();
+  if (user) {
+    await sendOrderNotificationEmailsAsync(order, user);
+  }
 
   return res
     .status(201)
@@ -1040,6 +1083,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     "shipped",
     "delivered",
     "cancelled",
+    "refunded",
   ];
   if (!validStatuses.includes(status)) {
     return res
@@ -1063,10 +1107,21 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 
   const previousStatus = order.status;
   order.status = status;
+  if (status === "refunded") {
+    order.paymentStatus = "refunded";
+    order.refundStatus = "processed";
+    order.refundedAt = new Date();
+    if (!order.refundAmount) {
+      order.refundAmount = order.finalTotalAmount;
+    }
+  }
   await order.save();
 
-  // Restore inventory asynchronously if the order was just cancelled
-  if (previousStatus !== "cancelled" && status === "cancelled") {
+  // Restore inventory asynchronously if the order was cancelled or refunded
+  if (
+    !["cancelled", "refunded"].includes(previousStatus) &&
+    ["cancelled", "refunded"].includes(status)
+  ) {
     InventoryService.restoreForCancelledOrder(order).catch((error) =>
       console.error(`Inventory restore failed for order ${order._id}:`, error.message),
     );
@@ -1163,6 +1218,7 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
     "shipped",
     "delivered",
     "cancelled",
+    "refunded",
   ];
   if (!validStatuses.includes(status)) {
     return res
@@ -1209,6 +1265,14 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
 
       const previousStatus = order.status;
       order.status = status;
+      if (status === "refunded") {
+        order.paymentStatus = "refunded";
+        order.refundStatus = "processed";
+        order.refundedAt = new Date();
+        if (!order.refundAmount) {
+          order.refundAmount = order.finalTotalAmount;
+        }
+      }
 
       // Add status update email tracking entry
       if (!order.emailTracking) {
@@ -1223,8 +1287,11 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
 
       await order.save();
 
-      // Restore inventory asynchronously if the order was just cancelled
-      if (previousStatus !== "cancelled" && status === "cancelled") {
+      // Restore inventory asynchronously if the order was cancelled or refunded
+      if (
+        !["cancelled", "refunded"].includes(previousStatus) &&
+        ["cancelled", "refunded"].includes(status)
+      ) {
         InventoryService.restoreForCancelledOrder(order).catch((error) =>
           console.error(`Inventory restore failed for order ${order._id}:`, error.message),
         );
@@ -1668,6 +1735,7 @@ const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
         "shipped",
         "delivered",
         "cancelled",
+        "refunded",
       ];
       if (validStatuses.includes(status)) {
         orderQuery.status = status;
@@ -1894,6 +1962,7 @@ const updateOrder = asyncHandler(async (req, res) => {
         "shipped",
         "delivered",
         "cancelled",
+        "refunded",
       ];
 
       if (!validStatuses.includes(updateData.status)) {
@@ -2993,9 +3062,83 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
           );
         }
       } else {
-        console.error(
-          `Order not found for webhook event ${eventType}. Payment ID: ${payment?.id}, Razorpay Order ID: ${payment?.order_id || rzpOrderEntity?.id}`,
-        );
+        // Fallback: If verifyRazorpayPayment was not reached by frontend (e.g. app crashed after payment),
+        // try to create the order from Razorpay order notes if cartId, addressId, userId are present.
+        const notes = payment?.notes || rzpOrderEntity?.notes;
+        const paymentId = payment?.id;
+        if (notes?.cartId && notes?.addressId && notes?.userId && paymentId) {
+          try {
+            let existing = await Order.findOne({ paymentId });
+            if (!existing) {
+              const summary = await prepareCartOrderData({
+                userId: notes.userId,
+                cartId: notes.cartId,
+                addressId: notes.addressId,
+                couponCode: notes.couponCode || null,
+                selectedItemIds: notes.selectedItemIds ? notes.selectedItemIds.split(",").filter(Boolean) : null,
+              });
+
+              const newOrder = new Order({
+                user: notes.userId,
+                items: summary.orderItems,
+                address: summary.addressSnapshot,
+                totalAmount: summary.totalAmount,
+                discountedTotalAmount: summary.discountedTotalAmount,
+                shippingCost: summary.shippingCost,
+                shippingDetails: summary.shippingDetails,
+                coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
+                couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
+                couponDiscountAmount: summary.couponDiscountAmount,
+                finalTotalAmount: summary.finalTotalAmount,
+                paymentMode: "ONLINE",
+                paymentStatus: "paid",
+                paymentId: paymentId,
+                razorpayOrderId: payment?.order_id || rzpOrderEntity?.id,
+                paymentMethod: payment?.method || null,
+                status: "confirmed",
+                paidAt: new Date(),
+              });
+              await newOrder.save();
+
+              if (summary.couponResult) {
+                CouponService.applyCouponUsage({
+                  couponId: summary.couponResult.coupon._id,
+                  userId: notes.userId,
+                  orderId: newOrder._id,
+                  discountAmount: summary.couponDiscountAmount,
+                  orderTotal: summary.discountedTotalAmount,
+                }).catch((e) => console.error("Webhook coupon usage failed:", e.message));
+              }
+
+              InventoryService.deductForOrder(newOrder).catch((e) =>
+                console.error("Webhook inventory deduction failed:", e.message)
+              );
+
+              const orderedIdsSet = new Set(summary.processedCartItemIds);
+              summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
+              await summary.cart.save();
+
+              try {
+                await ensureOrderBillGenerated(newOrder);
+              } catch (billError) {
+                console.error(`Bill generation failed for order ${newOrder._id}:`, billError.message);
+              }
+
+              const userObj = await User.findById(notes.userId);
+              if (userObj) {
+                await sendOrderNotificationEmailsAsync(newOrder, userObj);
+              }
+
+              console.log(`✅ Order ${newOrder._id} created via webhook fallback for payment ${paymentId}`);
+            }
+          } catch (webhookCreateErr) {
+            console.error("Failed to auto-create order from webhook notes:", webhookCreateErr.message);
+          }
+        } else {
+          console.error(
+            `Order not found for webhook event ${eventType}. Payment ID: ${payment?.id}, Razorpay Order ID: ${payment?.order_id || rzpOrderEntity?.id}`,
+          );
+        }
       }
     }
 
@@ -3028,6 +3171,62 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
       }
     }
 
+    // Handle refund events
+    if (
+      eventType === "refund.processed" ||
+      eventType === "refund.created" ||
+      eventType === "payment.refunded"
+    ) {
+      const refund = event.payload?.refund?.entity;
+      const payment = event.payload?.payment?.entity;
+
+      let order = null;
+      if (refund?.payment_id) {
+        order = await Order.findOne({ paymentId: refund.payment_id });
+      }
+      if (!order && payment?.id) {
+        order = await Order.findOne({ paymentId: payment.id });
+      }
+      if (!order && payment?.order_id) {
+        order = await Order.findOne({ razorpayOrderId: payment.order_id });
+      }
+      if (
+        !order &&
+        refund?.notes?.orderId &&
+        mongoose.Types.ObjectId.isValid(refund.notes.orderId)
+      ) {
+        order = await Order.findById(refund.notes.orderId);
+      }
+
+      if (order) {
+        const refundAmt = refund?.amount
+          ? refund.amount / 100
+          : (order.finalTotalAmount || 0);
+        order.refundId = refund?.id || order.refundId;
+        order.refundAmount = refundAmt;
+        order.refundStatus = "processed";
+        order.refundedAt = new Date();
+        order.paymentStatus = "refunded";
+        order.status = "refunded";
+        await order.save();
+
+        InventoryService.restoreForCancelledOrder(order).catch((err) =>
+          console.error(
+            `Inventory restore failed for refunded order ${order._id}:`,
+            err.message,
+          ),
+        );
+        CouponService.releaseCouponUsage(order._id).catch((err) =>
+          console.error(
+            `Coupon release failed for refunded order ${order._id}:`,
+            err.message,
+          ),
+        );
+
+        console.log(`Order ${order._id} marked as refunded via webhook`);
+      }
+    }
+
     return res.status(200).json({ status: "success" });
   } catch (error) {
     console.error("Webhook processing error:", error);
@@ -3036,157 +3235,262 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
 });
 
 const createRazorpayOrder = asyncHandler(async (req, res) => {
-  const { orderId } = req.body;
+  const { orderId, cartId, addressId, couponCode, selectedItemIds } = req.body;
 
-  if (!orderId) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Order ID is required", false));
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(orderId)) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Invalid order ID format", false));
-  }
-
-  try {
-    const order = await Order.findById(orderId);
-    if (!order) {
+  // Case A: Pre-existing order ID passed (backward compatibility / retry payment flow)
+  if (orderId) {
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
       return res
-        .status(404)
-        .json(new ApiResponse(404, null, "Order not found", false));
+        .status(400)
+        .json(new ApiResponse(400, null, "Invalid order ID format", false));
     }
 
-    // Security check: if order belongs to a registered user, caller MUST be that user
-    if (order.user) {
-      if (!req.user || order.user.toString() !== req.user._id.toString()) {
+    try {
+      const order = await Order.findById(orderId);
+      if (!order) {
         return res
-          .status(403)
+          .status(404)
+          .json(new ApiResponse(404, null, "Order not found", false));
+      }
+
+      // Security check: if order belongs to a registered user, caller MUST be that user
+      if (order.user) {
+        if (!req.user || order.user.toString() !== req.user._id.toString()) {
+          return res
+            .status(403)
+            .json(
+              new ApiResponse(
+                403,
+                null,
+                "Unauthorized access to this order",
+                false,
+              ),
+            );
+        }
+      }
+
+      if (order.status === "cancelled") {
+        return res
+          .status(400)
           .json(
             new ApiResponse(
-              403,
+              400,
               null,
-              "Unauthorized access to this order",
+              "Cannot create payment for a cancelled order",
               false,
             ),
           );
       }
-    }
 
-    if (order.status === "cancelled") {
-      return res
-        .status(400)
-        .json(
-          new ApiResponse(
-            400,
-            null,
-            "Cannot create payment for a cancelled order",
-            false,
-          ),
-        );
-    }
+      if (order.paymentStatus === "paid") {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Order has already been paid", false));
+      }
 
-    if (order.paymentStatus === "paid") {
-      return res
-        .status(400)
-        .json(new ApiResponse(400, null, "Order has already been paid", false));
-    }
+      // Convert amount to paise
+      const amountInPaise = Math.round(
+        parseFloat(order.finalTotalAmount.toString()) * 100,
+      );
 
-    // Convert amount to paise
-    const amountInPaise = Math.round(
-      parseFloat(order.finalTotalAmount.toString()) * 100,
-    );
+      if (isNaN(amountInPaise) || amountInPaise <= 0) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Invalid order total amount", false));
+      }
 
-    if (isNaN(amountInPaise) || amountInPaise <= 0) {
-      return res
-        .status(400)
-        .json(new ApiResponse(400, null, "Invalid order total amount", false));
-    }
+      const keyId = process.env.RAZORPAY_KEY_ID;
+      if (!keyId) {
+        return res
+          .status(500)
+          .json(
+            new ApiResponse(
+              500,
+              null,
+              "Razorpay key is not configured on server",
+              false,
+            ),
+          );
+      }
 
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    if (!keyId) {
+      // Resolve customer email
+      let customerEmail =
+        req.user?.email || order.guestInfo?.email || order.address?.email || "";
+      if (!customerEmail && order.user) {
+        const orderUser = await User.findById(order.user).select("email");
+        if (orderUser) customerEmail = orderUser.email || "";
+      }
+
+      const rzpOrderOptions = {
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: `rcpt_${order._id.toString().slice(-20)}`,
+        notes: {
+          orderId: order._id.toString(),
+          userId: req.user?._id ? req.user._id.toString() : "guest",
+        },
+      };
+
+      const rzpOrder = await razorpay.orders.create(rzpOrderOptions);
+
+      order.razorpayOrderId = rzpOrder.id;
+      order.paymentMode = "ONLINE";
+      await order.save();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            orderId: order._id,
+            razorpayOrderId: rzpOrder.id,
+            amount: rzpOrder.amount, // in paise
+            currency: rzpOrder.currency,
+            keyId: keyId,
+            customer: {
+              name: order.address?.name || "",
+              contact: order.address?.mobile || "",
+              email: customerEmail,
+            },
+          },
+          "Razorpay order created successfully",
+          true,
+        ),
+      );
+    } catch (error) {
+      console.error("Error creating Razorpay order:", error);
       return res
         .status(500)
         .json(
           new ApiResponse(
             500,
             null,
-            "Razorpay key is not configured on server",
+            `Failed to create Razorpay order: ${error.message}`,
             false,
           ),
         );
     }
+  }
 
-    // Resolve customer email
-    let customerEmail =
-      req.user?.email || order.guestInfo?.email || order.address?.email || "";
-    if (!customerEmail && order.user) {
-      const orderUser = await User.findById(order.user).select("email");
-      if (orderUser) customerEmail = orderUser.email || "";
+  // Case B: Option 1 Flow - Create Razorpay order directly from cart & address (no DB order created!)
+  if (cartId && addressId) {
+    const userId = req.user?._id;
+    if (!userId) {
+      return res
+        .status(401)
+        .json(new ApiResponse(401, null, "Authentication required to checkout cart", false));
     }
 
-    const rzpOrderOptions = {
-      amount: amountInPaise,
-      currency: "INR",
-      receipt: `rcpt_${order._id.toString().slice(-20)}`,
-      notes: {
-        orderId: order._id.toString(),
-        userId: req.user?._id ? req.user._id.toString() : "guest",
-      },
-    };
+    try {
+      const summary = await prepareCartOrderData({
+        userId,
+        cartId,
+        addressId,
+        couponCode,
+        selectedItemIds,
+      });
 
-    const rzpOrder = await razorpay.orders.create(rzpOrderOptions);
+      const amountInPaise = Math.round(
+        parseFloat(summary.finalTotalAmount.toString()) * 100,
+      );
 
-    order.razorpayOrderId = rzpOrder.id;
-    order.paymentMode = "ONLINE";
-    await order.save();
+      if (isNaN(amountInPaise) || amountInPaise <= 0) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Invalid calculated order total amount", false));
+      }
 
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        {
-          orderId: order._id,
-          razorpayOrderId: rzpOrder.id,
-          amount: rzpOrder.amount, // in paise
-          currency: rzpOrder.currency,
-          keyId: keyId,
-          customer: {
-            name: order.address?.name || "",
-            contact: order.address?.mobile || "",
-            email: customerEmail,
-          },
+      const keyId = process.env.RAZORPAY_KEY_ID;
+      if (!keyId) {
+        return res
+          .status(500)
+          .json(
+            new ApiResponse(
+              500,
+              null,
+              "Razorpay key is not configured on server",
+              false,
+            ),
+          );
+      }
+
+      const customerEmail = req.user?.email || summary.address?.email || "";
+
+      const rzpOrderOptions = {
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: `rcpt_${summary.cart._id.toString().slice(-14)}_${Date.now().toString().slice(-6)}`,
+        notes: {
+          userId: userId.toString(),
+          cartId: cartId.toString(),
+          addressId: addressId.toString(),
+          couponCode: couponCode || "",
+          selectedItemIds: Array.isArray(selectedItemIds) ? selectedItemIds.join(",") : "",
         },
-        "Razorpay order created successfully",
-        true,
-      ),
-    );
-  } catch (error) {
-    console.error("Error creating Razorpay order:", error);
-    return res
-      .status(500)
-      .json(
+      };
+
+      const rzpOrder = await razorpay.orders.create(rzpOrderOptions);
+
+      return res.status(200).json(
         new ApiResponse(
-          500,
-          null,
-          `Failed to create Razorpay order: ${error.message}`,
-          false,
+          200,
+          {
+            orderId: null, // Note: No database order created yet!
+            razorpayOrderId: rzpOrder.id,
+            amount: rzpOrder.amount, // in paise
+            currency: rzpOrder.currency,
+            keyId: keyId,
+            finalTotalAmount: summary.finalTotalAmount,
+            customer: {
+              name: summary.address?.name || "",
+              contact: summary.address?.mobile || "",
+              email: customerEmail,
+            },
+          },
+          "Razorpay checkout order created successfully (no order placed yet)",
+          true,
         ),
       );
+    } catch (error) {
+      console.error("Error creating Razorpay order from cart:", error);
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            `Failed to initiate payment: ${error.message}`,
+            false,
+          ),
+        );
+    }
   }
+
+  return res
+    .status(400)
+    .json(
+      new ApiResponse(
+        400,
+        null,
+        "Either 'orderId' or ('cartId' and 'addressId') is required",
+        false,
+      ),
+    );
 });
 
 const verifyRazorpayPayment = asyncHandler(async (req, res) => {
   const crypto = require("crypto");
   const {
     orderId,
+    cartId,
+    addressId,
+    couponCode,
+    selectedItemIds,
     razorpay_order_id,
     razorpay_payment_id,
     razorpay_signature,
   } = req.body;
 
   if (
-    !orderId ||
     !razorpay_order_id ||
     !razorpay_payment_id ||
     !razorpay_signature
@@ -3197,139 +3501,287 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
         new ApiResponse(
           400,
           null,
-          "orderId, razorpay_order_id, razorpay_payment_id, and razorpay_signature are required",
+          "razorpay_order_id, razorpay_payment_id, and razorpay_signature are required",
           false,
         ),
       );
   }
 
-  if (!mongoose.Types.ObjectId.isValid(orderId)) {
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Invalid order ID format", false));
-  }
-
-  try {
-    const order = await Order.findById(orderId);
-    if (!order) {
-      return res
-        .status(404)
-        .json(new ApiResponse(404, null, "Order not found", false));
-    }
-
-    // Security check: if order belongs to a registered user, caller MUST be that user
-    if (order.user) {
-      if (!req.user || order.user.toString() !== req.user._id.toString()) {
-        return res
-          .status(403)
-          .json(
-            new ApiResponse(
-              403,
-              null,
-              "Unauthorized access to this order",
-              false,
-            ),
-          );
-      }
-    }
-
-    // Idempotent success if order is already marked as paid
-    if (order.paymentStatus === "paid") {
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          order,
-          "Payment already verified and order confirmed",
-          true,
-        ),
-      );
-    }
-
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    if (!keySecret) {
-      return res
-        .status(500)
-        .json(
-          new ApiResponse(
-            500,
-            null,
-            "Razorpay secret is not configured on server",
-            false,
-          ),
-        );
-    }
-
-    // Verify HMAC-SHA256 signature
-    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
-    const expectedSignature = crypto
-      .createHmac("sha256", keySecret)
-      .update(body)
-      .digest("hex");
-
-    if (expectedSignature !== razorpay_signature) {
-      console.error(
-        `Razorpay signature verification failed for order ${orderId}. Expected: ${expectedSignature}, Received: ${razorpay_signature}`,
-      );
-      return res
-        .status(400)
-        .json(new ApiResponse(400, null, "Invalid payment signature", false));
-    }
-
-    // Optionally fetch payment details to store the payment method (upi, card, netbanking)
-    let paymentMethod = null;
-    try {
-      const paymentDetails = await razorpay.payments.fetch(razorpay_payment_id);
-      paymentMethod = paymentDetails?.method || null;
-    } catch (err) {
-      console.error(
-        "Could not fetch payment method from Razorpay:",
-        err.message,
-      );
-    }
-
-    order.paymentStatus = "paid";
-    order.paymentId = razorpay_payment_id;
-    order.razorpayOrderId = razorpay_order_id;
-    order.razorpaySignature = razorpay_signature;
-    order.paymentMode = "ONLINE";
-    if (paymentMethod) {
-      order.paymentMethod = paymentMethod;
-    }
-    order.paidAt = new Date();
-
-    if (order.status === "pending") {
-      order.status = "confirmed";
-    }
-
-    await order.save();
-
-    // Ensure order bill is generated
-    try {
-      await ensureOrderBillGenerated(order);
-    } catch (billError) {
-      console.error(
-        `Bill generation failed for order ${order._id}:`,
-        billError.message,
-      );
-    }
-
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        order,
-        "Payment verified and order confirmed successfully",
-        true,
-      ),
-    );
-  } catch (error) {
-    console.error("Error verifying payment signature:", error);
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keySecret) {
     return res
       .status(500)
       .json(
         new ApiResponse(
           500,
           null,
-          `Failed to verify payment: ${error.message}`,
+          "Razorpay secret is not configured on server",
+          false,
+        ),
+      );
+  }
+
+  // 1. Verify HMAC-SHA256 signature
+  const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+  const expectedSignature = crypto
+    .createHmac("sha256", keySecret)
+    .update(body)
+    .digest("hex");
+
+  if (expectedSignature !== razorpay_signature) {
+    console.error(
+      `Razorpay signature verification failed. Expected: ${expectedSignature}, Received: ${razorpay_signature}`,
+    );
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid payment signature", false));
+  }
+
+  // 2. Fetch payment details from Razorpay to get payment method & verify status
+  let paymentMethod = null;
+  try {
+    const paymentDetails = await razorpay.payments.fetch(razorpay_payment_id);
+    paymentMethod = paymentDetails?.method || null;
+  } catch (err) {
+    console.error("Could not fetch payment method from Razorpay:", err.message);
+  }
+
+  // Case A: Existing order verification (when orderId is supplied)
+  if (orderId) {
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Invalid order ID format", false));
+    }
+
+    try {
+      const order = await Order.findById(orderId);
+      if (!order) {
+        return res
+          .status(404)
+          .json(new ApiResponse(404, null, "Order not found", false));
+      }
+
+      if (order.user) {
+        if (!req.user || order.user.toString() !== req.user._id.toString()) {
+          return res
+            .status(403)
+            .json(
+              new ApiResponse(
+                403,
+                null,
+                "Unauthorized access to this order",
+                false,
+              ),
+            );
+        }
+      }
+
+      if (order.paymentStatus === "paid") {
+        return res.status(200).json(
+          new ApiResponse(
+            200,
+            order,
+            "Payment already verified and order confirmed",
+            true,
+          ),
+        );
+      }
+
+      order.paymentStatus = "paid";
+      order.paymentId = razorpay_payment_id;
+      order.razorpayOrderId = razorpay_order_id;
+      order.razorpaySignature = razorpay_signature;
+      order.paymentMode = "ONLINE";
+      if (paymentMethod) {
+        order.paymentMethod = paymentMethod;
+      }
+      order.paidAt = new Date();
+
+      if (order.status === "pending") {
+        order.status = "confirmed";
+      }
+
+      await order.save();
+
+      try {
+        await ensureOrderBillGenerated(order);
+      } catch (billError) {
+        console.error(
+          `Bill generation failed for order ${order._id}:`,
+          billError.message,
+        );
+      }
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          order,
+          "Payment verified and order confirmed successfully",
+          true,
+        ),
+      );
+    } catch (error) {
+      console.error("Error verifying payment for existing order:", error);
+      return res
+        .status(500)
+        .json(
+          new ApiResponse(
+            500,
+            null,
+            `Failed to verify payment: ${error.message}`,
+            false,
+          ),
+        );
+    }
+  }
+
+  // Case B: Option 1 Flow - Create order in DB ONLY NOW after verified payment!
+  try {
+    // Idempotency check: see if an order was already created with this payment ID
+    let existingOrder = await Order.findOne({ paymentId: razorpay_payment_id });
+    if (existingOrder) {
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          existingOrder,
+          "Payment already verified and order confirmed",
+          true,
+        ),
+      );
+    }
+
+    // Resolve cartId, addressId, couponCode, selectedItemIds (from body or Razorpay order notes)
+    let cId = cartId;
+    let aId = addressId;
+    let cCode = couponCode;
+    let selItemIds = selectedItemIds;
+    let uid = req.user?._id;
+
+    if (!cId || !aId) {
+      try {
+        const rzpOrderDetails = await razorpay.orders.fetch(razorpay_order_id);
+        if (rzpOrderDetails?.notes) {
+          cId = cId || rzpOrderDetails.notes.cartId;
+          aId = aId || rzpOrderDetails.notes.addressId;
+          cCode = cCode || rzpOrderDetails.notes.couponCode;
+          if (!selItemIds && rzpOrderDetails.notes.selectedItemIds) {
+            selItemIds = rzpOrderDetails.notes.selectedItemIds.split(",").filter(Boolean);
+          }
+          if (!uid && rzpOrderDetails.notes.userId && rzpOrderDetails.notes.userId !== "guest") {
+            uid = rzpOrderDetails.notes.userId;
+          }
+        }
+      } catch (fetchErr) {
+        console.error("Could not fetch Razorpay order notes:", fetchErr.message);
+      }
+    }
+
+    if (!cId || !aId) {
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            "cartId and addressId are required to complete order creation",
+            false,
+          ),
+        );
+    }
+
+    if (!uid) {
+      return res
+        .status(401)
+        .json(
+          new ApiResponse(401, null, "User authentication required to place order", false),
+        );
+    }
+
+    const summary = await prepareCartOrderData({
+      userId: uid,
+      cartId: cId,
+      addressId: aId,
+      couponCode: cCode,
+      selectedItemIds: selItemIds,
+    });
+
+    const order = new Order({
+      user: uid,
+      items: summary.orderItems,
+      address: summary.addressSnapshot,
+      totalAmount: summary.totalAmount,
+      discountedTotalAmount: summary.discountedTotalAmount,
+      shippingCost: summary.shippingCost,
+      shippingDetails: summary.shippingDetails,
+      coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
+      couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
+      couponDiscountAmount: summary.couponDiscountAmount,
+      finalTotalAmount: summary.finalTotalAmount,
+      paymentMode: "ONLINE",
+      paymentStatus: "paid",
+      paymentId: razorpay_payment_id,
+      razorpayOrderId: razorpay_order_id,
+      razorpaySignature: razorpay_signature,
+      paymentMethod: paymentMethod,
+      status: "confirmed",
+      paidAt: new Date(),
+    });
+    await order.save();
+
+    // Apply coupon usage
+    if (summary.couponResult) {
+      CouponService.applyCouponUsage({
+        couponId: summary.couponResult.coupon._id,
+        userId: uid,
+        orderId: order._id,
+        discountAmount: summary.couponDiscountAmount,
+        orderTotal: summary.discountedTotalAmount,
+      }).catch((error) =>
+        console.error(`Coupon usage recording failed for order ${order._id}:`, error.message),
+      );
+    }
+
+    // Deduct inventory
+    InventoryService.deductForOrder(order).catch((error) =>
+      console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
+    );
+
+    // Clear purchased items from cart
+    const orderedIdsSet = new Set(summary.processedCartItemIds);
+    summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
+    await summary.cart.save();
+
+    // Generate order bill / invoice PDF
+    try {
+      await ensureOrderBillGenerated(order);
+    } catch (billError) {
+      console.error(`Bill generation failed for order ${order._id}:`, billError.message);
+    }
+
+    // Send order confirmation emails
+    const user = await User.findById(uid);
+    if (user) {
+      await sendOrderNotificationEmailsAsync(order, user);
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "Payment verified and order created successfully",
+        true,
+      ),
+    );
+  } catch (error) {
+    console.error("Error creating order upon payment verification:", error);
+    return res
+      .status(500)
+      .json(
+        new ApiResponse(
+          500,
+          null,
+          `Failed to place order after payment: ${error.message}`,
           false,
         ),
       );
@@ -3348,6 +3800,113 @@ const getRazorpayConfig = asyncHandler(async (req, res) => {
       true,
     ),
   );
+});
+
+const refundOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { amount, reason } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID format", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (order.paymentStatus !== "paid") {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          `Cannot refund an order with payment status: ${order.paymentStatus}`,
+          false,
+        ),
+      );
+  }
+
+  if (!order.paymentId) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "No Razorpay payment ID found for this order to process refund",
+          false,
+        ),
+      );
+  }
+
+  try {
+    const refundAmount = amount ? parseFloat(amount) : order.finalTotalAmount;
+    const amountInPaise = Math.round(refundAmount * 100);
+
+    const refundOptions = {
+      amount: amountInPaise,
+      notes: {
+        orderId: order._id.toString(),
+        reason: reason || "Admin initiated refund",
+      },
+    };
+
+    const rzpRefund = await razorpay.payments.refund(
+      order.paymentId,
+      refundOptions,
+    );
+
+    order.refundId = rzpRefund.id;
+    order.refundAmount = refundAmount;
+    order.refundStatus = "processed";
+    order.refundedAt = new Date();
+    order.paymentStatus = "refunded";
+    order.status = "refunded";
+    await order.save();
+
+    InventoryService.restoreForCancelledOrder(order).catch((err) =>
+      console.error(
+        `Inventory restore failed for refunded order ${order._id}:`,
+        err.message,
+      ),
+    );
+    CouponService.releaseCouponUsage(order._id).catch((err) =>
+      console.error(
+        `Coupon release failed for refunded order ${order._id}:`,
+        err.message,
+      ),
+    );
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          order,
+          refund: rzpRefund,
+        },
+        "Order refunded successfully",
+        true,
+      ),
+    );
+  } catch (error) {
+    console.error("Refund processing failed:", error);
+    return res
+      .status(500)
+      .json(
+        new ApiResponse(
+          500,
+          null,
+          `Refund failed: ${error.message || "Unknown error"}`,
+          false,
+        ),
+      );
+  }
 });
 
 module.exports = {
@@ -3372,4 +3931,5 @@ module.exports = {
   createRazorpayOrder,
   verifyRazorpayPayment,
   getRazorpayConfig,
+  refundOrder,
 };
