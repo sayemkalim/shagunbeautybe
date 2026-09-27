@@ -24,8 +24,9 @@ exports.sendEmail = async (emailOptions) => {
     };
 
     const response = await brevo.sendTransacEmail(sendSmtpEmail);
-    console.log("✅ Email sent successfully:", response.messageId);
-    return response;
+    const messageId = response.body?.messageId || response.messageId;
+    console.log("✅ Email sent successfully:", messageId);
+    return response.body || response;
   } catch (error) {
     console.error("❌ Email sending failed:", error.message);
     throw new Error(`Email sending failed: ${error.message}`);

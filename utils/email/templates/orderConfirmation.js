@@ -372,7 +372,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
                                                   Email Us
                                                 </div>
                                                 <div style="font-size: 14px; line-height: 143%; color: #2a1e19; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: -0.2px;">
-                                                  info@shagunbeauty.com
+                                                  helpshagunbeauty@gmail.com
                                                 </div>
                                               </td>
                                             </tr>
@@ -437,7 +437,7 @@ const generateCustomerOrderConfirmation = (order, user) => {
                                             <tr>
                                               <td>
                                                 <div style="font-size: 15px; line-height: 143%; color: #585858; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: 0px;">
-                                                  Feel free to reach out to us at <strong style="color: #1a110c;">info@shagunbeauty.com</strong>
+                                                  Feel free to reach out to us at <strong style="color: #1a110c;">helpshagunbeauty@gmail.com</strong>
                                                   <br/>We open opportunities for all forms of business collaboration
                                                 </div>
                                               </td>
@@ -1189,7 +1189,7 @@ const generateCustomerOrderUpdate = (order, user) => {
                                                   Email Us
                                                 </div>
                                                 <div style="font-size: 14px; line-height: 143%; color: #2a1e19; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: -0.2px;">
-                                                  info@shagunbeauty.com
+                                                  helpshagunbeauty@gmail.com
                                                 </div>
                                               </td>
                                             </tr>
@@ -1254,7 +1254,7 @@ const generateCustomerOrderUpdate = (order, user) => {
                                             <tr>
                                               <td>
                                                 <div style="font-size: 15px; line-height: 143%; color: #585858; font-family: 'Outfit', Arial, Helvetica, sans-serif; letter-spacing: 0px;">
-                                                  Feel free to reach out to us at <strong style="color: #1a110c;">info@shagunbeauty.com</strong>
+                                                  Feel free to reach out to us at <strong style="color: #1a110c;">helpshagunbeauty@gmail.com</strong>
                                                   <br/>We open opportunities for all forms of business collaboration
                                                 </div>
                                               </td>

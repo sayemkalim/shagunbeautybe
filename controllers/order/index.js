@@ -599,7 +599,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
             guestUser,
           );
           const adminEmailOptions = {
-            to: 'info@shagunbeauty.com', 
+            to: 'helpshagunbeauty@gmail.com', 
             subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
             html: adminHtmlContent,
           };
@@ -648,7 +648,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
             guestUser,
           );
           const adminEmailOptions = {
-            to: 'info@shagunbeauty.com',
+            to: 'helpshagunbeauty@gmail.com',
             subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
             html: adminHtmlContent,
           };
@@ -726,7 +726,7 @@ const sendOrderNotificationEmailsAsync = async (order, user) => {
           user.toObject ? user.toObject() : user,
         );
         const adminEmailOptions = {
-          to: "info@shagunbeauty.com",
+          to: "helpshagunbeauty@gmail.com",
           subject: `🛒 Order #${order.orderNumber} - ${new Date().toLocaleDateString('en-IN', {day: 'numeric', month: 'long', year: 'numeric'})} - ₹${order.finalTotalAmount} from ${order.address?.city}, ${order.address?.state}`,
           html: adminHtmlContent,
         };

@@ -276,7 +276,7 @@ const generateForgotPasswordEmail = (user, code, options = {}) => {
                                                   Email Us
                                                 </div>
                                                 <div style="font-size: 14px; line-height: 143%; color: #2a1e19; font-family: 'Outfit', Arial, Helvetica, sans-serif;">
-                                                  info@shagunbeauty.com
+                                                  helpshagunbeauty@gmail.com
                                                 </div>
                                               </td>
                                             </tr>
