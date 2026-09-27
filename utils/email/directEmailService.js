@@ -272,34 +272,38 @@ async function sendWelcomeEmail(data) {
 }
 
 /**
- * Send forgot password email with new password directly
+ * Send forgot password / PIN reset email with OTP or new password directly
  */
 async function sendForgotPasswordEmail(data) {
-  const { user, newPassword } = data;
+  const { user, otp, newPassword } = data;
+  const code = otp || newPassword;
+  const isOtp = Boolean(otp) || /^\d{6}$/.test(code);
   
-  console.log("\n🎯 Processing Forgot Password Email (Direct)");
+  console.log("\n🎯 Processing Forgot PIN / Password Email (Direct)");
   console.log("👤 User:", user.name, `(${user.email})`);
-  console.log("🔑 New password generated");
+  console.log("🔑 Verification code/password provided");
 
   try {
     if (user.email) {
-      console.log("📨 Preparing password reset email to:", user.email);
-      const forgotPasswordHTML = generateForgotPasswordEmail(user, newPassword);
+      console.log("📨 Preparing reset email to:", user.email);
+      const forgotPasswordHTML = generateForgotPasswordEmail(user, code, { isOtp });
       
       const result = await sendEmail({
         to: user.email,
-        subject: `Password Reset - Shagun Beauty 🔐`,
+        subject: isOtp
+          ? `Your PIN Reset Verification Code - Shagun Beauty 🔐`
+          : `Password Reset - Shagun Beauty 🔐`,
         html: forgotPasswordHTML,
       });
 
       if (result.success) {
-        console.log("✅ Password reset email sent successfully");
+        console.log("✅ PIN/Password reset email sent successfully");
       } else {
-        throw new Error("Failed to send password reset email");
+        throw new Error("Failed to send reset email");
       }
     }
   } catch (error) {
-    console.error("❌ Password reset email failed:", error.message);
+    console.error("❌ Reset email failed:", error.message);
     throw error;
   }
 }

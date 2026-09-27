@@ -349,7 +349,10 @@ User schema: `name` (optional), `email` (optional, unique+sparse), `phone` (opti
 2. If `is_new_user: false`, client prompts for the 4-digit PIN and calls `POST /verify-login` with `{ phoneNumber, pin }`. Correct PIN → JWT issued (login complete). Wrong PIN increments a per-user attempt counter; after 10 wrong attempts within a rolling 1-hour window, further attempts are rejected with `429` until the window resets.
 3. If `is_new_user: true`, client collects a PIN the user wants to set (required) plus optional `name`/`email`, and calls `POST /register` with `{ phoneNumber, pin, name?, email? }`. This completes the stub record (or creates one if `/login` wasn't called first) and issues a JWT.
 
-There is no forgot-password/forgot-PIN flow currently — the old `POST /forgot-password` endpoint (email/password-based) was removed along with the `password` field.
+**Forgot PIN / Password Flow**:
+1. Client calls `POST /forgot-pin` (or `/forgot-password`) with `{ "phoneNumber": "..." }` or `{ "email": "..." }`. The server validates that the user exists and has a registered email, generates a 6-digit OTP (valid for 10 minutes), saves it on the user record, and sends a branded email to the user's registered email with the OTP.
+2. (Optional) Client can call `POST /verify-reset-otp` with `{ "phoneNumber": "...", "otp": "..." }` to verify the OTP beforehand. On success, a 15-minute `resetToken` is returned.
+3. Client calls `POST /reset-pin` (or `/reset-password`) with `{ "phoneNumber": "...", "otp": "...", "newPin": "1234" }` OR `{ "resetToken": "...", "newPin": "1234" }`. The server validates that the new PIN is exactly 4 digits, hashes it with bcrypt, clears the OTP and any previous PIN lockout attempts, and returns the user object with a new `token` (automatically logging in).
 
 ### GET /api/auth/user/
 
@@ -465,6 +468,127 @@ Google OAuth login/registration. Verifies a Google ID token server-side and crea
 - `500 {"message": "<error.message or 'Google authentication failed'>"}` — other verification errors
 
 **Notable behavior**: Looks up user by `googleId` first, then by `email` (to link an existing local account to Google — sets `googleId`, `authProvider`, optionally `profilePicture`). If neither exists, creates a brand-new user with no `phone` field at all (deliberately omitted to avoid unique-index collisions between multiple Google users), and fires a welcome email asynchronously.
+
+---
+
+### POST /api/auth/user/forgot-pin (alias: /forgot-password)
+
+Step 1 of the Forgot PIN flow. Looks up the user by phone number or email, validates that the account has a registered email, generates a 6-digit OTP (valid for 10 minutes), and sends an email to the user's registered email address.
+
+**Auth**: None.
+
+**Request body**:
+```json
+{
+  "phoneNumber": "string (e.g. '9876543210')"
+  // or "email": "string (e.g. 'user@example.com')"
+}
+```
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "email": "s***m@gmail.com",
+    "phone": "9876543210"
+  },
+  "message": "Verification code sent to your registered email (s***m@gmail.com)",
+  "success": true
+}
+```
+
+**Errors**:
+- `400 {"message": "Phone number or email is required"}`
+- `404 {"message": "User not found with provided details"}`
+- `400 {"message": "User registration is not complete yet"}`
+- `400 {"message": "No registered email found for this account. Please contact customer support."}`
+
+---
+
+### POST /api/auth/user/verify-reset-otp
+
+Step 2 of the Forgot PIN flow (optional standalone step). Verifies the 6-digit OTP and returns a 15-minute `resetToken`.
+
+**Auth**: None.
+
+**Request body**:
+```json
+{
+  "phoneNumber": "string (e.g. '9876543210')",
+  "otp": "string (6 digits)"
+}
+```
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "resetToken": "<jwt token>",
+    "phone": "9876543210",
+    "email": "user@example.com"
+  },
+  "message": "OTP verified successfully. You can now set your new PIN.",
+  "success": true
+}
+```
+
+**Errors**:
+- `400 {"message": "Phone/email and OTP are required"}`
+- `404 {"message": "User not found"}`
+- `429 {"message": "Too many incorrect attempts. Please request a new OTP."}` (max 5 incorrect attempts)
+- `400 {"message": "OTP has expired or is invalid. Please request a new one."}`
+- `400 {"message": "Invalid verification code"}`
+
+---
+
+### POST /api/auth/user/reset-pin (alias: /reset-password)
+
+Step 3 of the Forgot PIN flow. Sets the new 4-digit security PIN and logs the user in immediately. Accepts either direct `{ phoneNumber, otp, newPin }` or `{ resetToken, newPin }`.
+
+**Auth**: None.
+
+**Request body** (Option A — direct with OTP):
+```json
+{
+  "phoneNumber": "string (e.g. '9876543210')",
+  "otp": "string (6 digits)",
+  "newPin": "string (exactly 4 digits)"
+}
+```
+
+**Request body** (Option B — with resetToken from verify-reset-otp):
+```json
+{
+  "resetToken": "string",
+  "newPin": "string (exactly 4 digits)"
+}
+```
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "id": "<userId>",
+    "name": "User Name",
+    "email": "user@example.com",
+    "phone": "9876543210",
+    "token": "<new access token>"
+  },
+  "message": "PIN updated successfully. Logged in.",
+  "success": true
+}
+```
+
+**Errors**:
+- `400 {"message": "New PIN is required"}`
+- `400 {"message": "PIN must be exactly 4 digits"}`
+- `401 {"message": "Reset token has expired or is invalid"}`
+- `400 {"message": "OTP has expired or is invalid. Please request a new one."}`
+- `400 {"message": "Invalid verification code"}`
+- `404 {"message": "User not found"}`
 
 ---
 
@@ -791,13 +915,13 @@ Delete a brand.
 
 Base path: `/api/product`. Source: `routes/product/index.js`, `controllers/products/index.js` (note the directory is `controllers/products`, plural), model `models/productsModel.js`.
 
-Product schema (key fields): `name` (required), `sku` (required, unique), `small_description`, `full_description`, `price` (Decimal128, required — this is the MRP), `discounted_price` (Decimal128, nullable, must be ≥0 — the flat qty=1 selling price), `tags` ([String] enum: `no_palm_oil, organic, no_gmo, no_aritificial_flavors, vegan, sugar_free, gluten_free, soya_free, no_preservatives, lactose_free, no_flavor_enhancer`), `inventory` (Number, enum `[0,1]`, default 0 — i.e. this is really an in-stock/out-of-stock flag, not a quantity), `status` (enum `published|draft`, default `draft`), `weight_in_grams` (Number, nullable), `manufacturer`, `consumed_type`, `banner_image` (String URL), `images` ([String] URLs), `expiry_date` (Date), `meta_data` (Map), `brand` (ObjectId ref Brand, optional), `is_best_seller`/`is_imported_picks`/`is_bakery`/`celiacFriendly` (Booleans, default false), `sub_category` (ObjectId ref SubCategory, required), `created_by_admin` (ObjectId ref Admin, required), `variants` ([{ sku (required, unique per-product), name, attributes (Map), price (Decimal128, required), discounted_price (Decimal128, nullable), inventory (Number, default 0), images ([String]) }]), `price_tiers` ([{ quantity (Number, required, integer ≥2, unique per product), price (Decimal128, required, ≥0) }] — bulk/pack-size pricing, base product only, see below).
+Product schema (key fields): `name` (required), `sku` (required, unique), `small_description`, `full_description`, `price` (Decimal128, required — this is the MRP), `discounted_price` (Decimal128, nullable, must be ≥0 — the flat qty=1 selling price), `tags` ([String] enum: `no_palm_oil, organic, no_gmo, no_aritificial_flavors, vegan, sugar_free, gluten_free, soya_free, no_preservatives, lactose_free, no_flavor_enhancer`), `inventory` (Number, enum `[0,1]`, default 0 — i.e. this is really an in-stock/out-of-stock flag, not a quantity), `status` (enum `published|draft`, default `draft`), `weight_in_grams` (Number, nullable), `manufacturer`, `consumed_type`, `banner_image` (String URL), `images` ([String] URLs), `expiry_date` (Date), `meta_data` (Map), `brand` (ObjectId ref Brand, optional), `is_best_seller`/`is_imported_picks`/`is_bakery`/`celiacFriendly` (Booleans, default false), `sub_category` (ObjectId ref SubCategory, required), `created_by_admin` (ObjectId ref Admin, required), `variants` ([{ sku (required, unique per-product), name, attributes (Map), price (Decimal128, required), discounted_price (Decimal128, nullable), inventory (Number, default 0), images ([String]), price_tiers ([{ quantity (Number, min 2), price (Decimal128) }]) }]), `price_tiers` ([{ quantity (Number, required, integer ≥2, unique per product), price (Decimal128, required, ≥0) }] — bulk/pack-size pricing for base product or variants, see below).
 
-**Bulk pack-size pricing (`price_tiers`)**: lets an admin define a fixed menu of purchasable quantities with a per-unit price for each, e.g. buy 1 at ₹450 (the normal `discounted_price`), buy 4 at ₹410/unit, buy 10 at ₹360/unit. Source of truth: `utils/pricing/index.js` (`getProductQuantityOptions`, `resolveProductUnitPrice`), used by both the cart (`services/cart/index.js`) and every order-pricing code path (`controllers/order/index.js`).
+**Bulk pack-size pricing (`price_tiers`)**: lets an admin define a fixed menu of purchasable quantities with a per-unit price for each, e.g. buy 1 at ₹450 (the normal `discounted_price`), buy 4 at ₹410/unit, buy 10 at ₹360/unit. Source of truth: `utils/pricing/index.js` (`getProductQuantityOptions`, `resolveProductUnitPrice`, `resolveVariantUnitPrice`), used by both the cart (`services/cart/index.js`) and every order-pricing code path (`controllers/order/index.js`).
 - qty=1 is always implicit and priced at `discounted_price` (falling back to `price`/MRP) — `price_tiers` only needs to carry the *additional* pack sizes (quantity ≥ 2).
-- **If a product has no `price_tiers` defined** (the default, and every pre-existing product), quantity is completely unrestricted and priced flat at `discounted_price`/`price` — identical to pre-tiered-pricing behavior. Nothing changes for products that don't opt in.
-- **If a product HAS `price_tiers`**, the customer can only buy quantities that exactly match qty=1 or one of the defined tier quantities (a fixed dropdown/menu on the frontend, not a free-typed number) — cart-add and every order-creation/edit endpoint reject any other quantity with `400`/thrown-error `Invalid quantity <n> for this product. Available quantities: <list>`.
-- Tiers apply to the **base product only** — variant pricing (`variants[].price`/`discounted_price`) is untouched and still accepts any quantity, unaffected by `price_tiers`.
+- **If a product or variant has no `price_tiers` defined** (the default), quantity is priced flat at `discounted_price`/`price`.
+- **If a product or variant HAS `price_tiers`**, matching tier quantities receive their designated per-unit tier price.
+- Tiers apply to the **base product** (via `product.price_tiers`) and to **individual variants** (via `variants[].price_tiers`). Each variant can have its own independent tiered pricing menu.
 - `totalAmount`/`total_amount` on orders always reflects `price` (MRP) × quantity regardless of tier (the "savings" baseline); `discountedTotalAmount`/`discounted_total_amount` reflects the resolved tier (or flat) unit price × quantity — this is the amount actually charged.
 
 ### POST /api/product/
@@ -1126,7 +1250,7 @@ Add/update/remove a line item in the current user's cart (quantity `0` removes t
 - `400 {"message":"Bundle ID is required for bundle type"}`
 - Service-layer thrown errors (surfaced as generic 500 via `asyncHandler` since they aren't caught explicitly here): `"Invalid quantity"` (negative), `"Product not found"`, `` `Variant with SKU '...' not found` ``, `"Bundle not found"`, `"Bundle is not available"` (inactive), `"Invalid bundle price"`, `"Invalid type. Must be 'product' or 'bundle'"`, and — for a `type: "product"` item with no `variant_sku` on a product that has `price_tiers` defined — `` `Invalid quantity <n> for this product. Available quantities: <comma-separated list>` `` if `quantity` doesn't exactly match qty=1 or one of the product's tier quantities.
 
-**Notable behavior — bulk pack-size pricing**: for `type: "product"` without `variant_sku`, the unit price is resolved via `utils/pricing/index.js` (shared with order creation — see the Product section above for the full `price_tiers` model). Products with no `price_tiers` accept any positive integer quantity at the flat `discounted_price`/`price`, unchanged from before this feature existed. Products with `price_tiers` only accept quantities exactly matching qty=1 or one of the defined tiers — anything else is rejected rather than silently priced. `variant_sku` selections are always priced at the variant's own flat price regardless of quantity, untouched by `price_tiers`. Bundles are entirely unaffected by this feature.
+**Notable behavior — bulk pack-size pricing**: for `type: "product"`, the unit price is resolved via `utils/pricing/index.js` (shared with order creation — see the Product section above for the full `price_tiers` model). For base products, `product.price_tiers` applies. For variants (when `variant_sku` is provided), `variant.price_tiers` applies if defined, or flat variant price otherwise. Bundles are unaffected by this feature.
 
 ---
 
@@ -1405,7 +1529,7 @@ Order schema (key fields): `orderNumber` (Number, unique, auto-incremented via a
 
 Two routes reference controller functions (`buyNowOrder`, `generateOrderBill`) that are **commented out** in the router — they are not live endpoints and are omitted below. `handlePaymentWebhook` is exported from this controller but mounted separately under `/api/webhook` (see the [Webhook](#webhook) section) — there is no route for it directly under `/api/order`.
 
-**Bulk pack-size pricing at checkout**: every code path that prices a `type: "product"` order line (cart checkout, guest checkout, customer order edit, admin add/update order items) resolves the per-unit price through the same `utils/pricing/index.js` helpers used by the cart (see the Product and Cart sections above). `totalAmount`/`total_amount` always reflects MRP (`price`) × quantity; `discountedTotalAmount`/`discounted_total_amount` reflects the resolved tier-or-flat unit price × quantity (the amount actually charged). If a product has `price_tiers` and the requested quantity doesn't exactly match qty=1 or one of the defined tiers, the request is rejected with `400 {"message":"Invalid quantity <n> for product \"<name>\". Available quantities: <list>"}` rather than silently mispricing it. Products with no `price_tiers` are unaffected — any positive integer quantity is accepted at the flat price, same as before this feature existed. Cart lines with a `variant_sku` are also unaffected (variant pricing is flat regardless of quantity, ignoring `price_tiers`).
+**Bulk pack-size pricing at checkout**: every code path that prices a `type: "product"` order line (cart checkout, guest checkout, customer order edit, admin add/update order items) resolves the per-unit price through the same `utils/pricing/index.js` helpers used by the cart (see the Product and Cart sections above). `totalAmount`/`total_amount` always reflects MRP (`price`) × quantity; `discountedTotalAmount`/`discounted_total_amount` reflects the resolved tier-or-flat unit price × quantity (the amount actually charged). Tiers apply both to base products and to variants with defined `price_tiers`. Products and variants with no `price_tiers` are unaffected — any positive integer quantity is accepted at the flat price.
 
 ### GET /api/order/export
 

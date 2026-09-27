@@ -78,37 +78,33 @@ const ensureOrderBillGenerated = async (order, { force = false } = {}) => {
 };
 
 // Resolves a product order line's per-unit MRP and per-unit charged price (tier-aware) for a given quantity.
-// If quantity exactly matches a price tier, that tier's price is used; otherwise the base price applies.
-const resolveOrderItemUnitPrices = (product, quantity) => {
-  const price = parseFloat(product.price.toString());
-  const discountedPrice = resolveProductUnitPrice(product, quantity);
-  return { price, discountedPrice };
-};
-
-// Resolves a product order item snapshot including variant pricing, title, images, and variant_sku
-const resolveProductOrderItem = (product, quantity, variantSku = null) => {
-  let price, discountedPrice;
+// Supports both base products and variants with bulk price tiers.
+const resolveOrderItemUnitPrices = (product, quantity, variantSku = null) => {
   let variantObj = null;
   if (variantSku && Array.isArray(product.variants)) {
     variantObj = product.variants.find(
       (v) => v.sku === variantSku || v._id?.toString() === variantSku?.toString()
     );
-    if (variantObj) {
-      price = parseFloat((variantObj.price ?? product.price).toString());
-      discountedPrice = variantObj.discounted_price !== null && variantObj.discounted_price !== undefined
-        ? parseFloat(variantObj.discounted_price.toString())
-        : (variantObj.price ? parseFloat(variantObj.price.toString()) : price);
-    } else {
-      price = parseFloat(product.price.toString());
-      discountedPrice = product.discounted_price
-        ? parseFloat(product.discounted_price.toString())
-        : price;
-    }
-  } else {
-    const pricing = resolveOrderItemUnitPrices(product, quantity);
-    price = pricing.price;
-    discountedPrice = pricing.discountedPrice;
   }
+
+  if (variantObj) {
+    const price = parseFloat((variantObj.price ?? product.price).toString());
+    const discountedPrice = resolveProductUnitPrice(variantObj, quantity);
+    return { price, discountedPrice, variantObj };
+  }
+
+  const price = parseFloat(product.price.toString());
+  const discountedPrice = resolveProductUnitPrice(product, quantity);
+  return { price, discountedPrice, variantObj: null };
+};
+
+// Resolves a product order item snapshot including variant pricing, title, images, and variant_sku
+const resolveProductOrderItem = (product, quantity, variantSku = null) => {
+  const { price, discountedPrice, variantObj } = resolveOrderItemUnitPrices(
+    product,
+    quantity,
+    variantSku
+  );
 
   const itemTotal = price * quantity;
   const discountedItemTotal = discountedPrice * quantity;
@@ -2114,8 +2110,8 @@ const updateOrder = asyncHandler(async (req, res) => {
             );
         }
 
-        const pricing = resolveOrderItemUnitPrices(product, qty);
-        const { price, discountedPrice } = pricing;
+        const pricing = resolveOrderItemUnitPrices(product, qty, productData.variant_sku);
+        const { price, discountedPrice, variantObj } = pricing;
         const itemTotal = price * qty;
         const discountedItemTotal = discountedPrice * qty;
 
@@ -2124,14 +2120,15 @@ const updateOrder = asyncHandler(async (req, res) => {
           type: "product",
           product: {
             _id: product._id,
-            name: product.name,
+            name: variantObj?.name || product.name,
             price: product.price,
-            discounted_price: product.discounted_price,
-            banner_image: product.banner_image || (product.images && product.images[0]) || null,
-            image: (product.images && product.images[0]) || product.banner_image || null,
-            images: product.images || [],
+            discounted_price: discountedPrice,
+            banner_image: (variantObj?.images && variantObj.images[0]) || variantObj?.image || product.banner_image || (product.images && product.images[0]) || null,
+            image: (variantObj?.images && variantObj.images[0]) || (product.images && product.images[0]) || product.banner_image || null,
+            images: (variantObj?.images && variantObj.images.length > 0) ? variantObj.images : (product.images || []),
             sub_category: product.sub_category,
           },
+          variant_sku: productData.variant_sku || null,
           quantity: qty,
           total_amount: mongoose.Types.Decimal128.fromString(
             itemTotal.toString(),
@@ -2201,7 +2198,11 @@ const updateOrder = asyncHandler(async (req, res) => {
               );
           }
 
-          const pricing = resolveOrderItemUnitPrices(product, quantity);
+          const pricing = resolveOrderItemUnitPrices(
+            product,
+            quantity,
+            order.items[itemIndex].variant_sku
+          );
           const { price, discountedPrice } = pricing;
           const itemTotal = price * quantity;
           const discountedItemTotal = discountedPrice * quantity;

@@ -22,10 +22,7 @@ const getCart = async ({ user_id }) => {
         if (item.variant_sku && Array.isArray(prod.variants)) {
           const variant = prod.variants.find((v) => v.sku === item.variant_sku);
           if (variant) {
-            currentUnitPrice =
-              variant.discounted_price !== null && variant.discounted_price !== undefined
-                ? parseFloat(variant.discounted_price.toString())
-                : parseFloat(variant.price.toString());
+            currentUnitPrice = resolveProductUnitPrice(variant, item.quantity || 1);
           }
         } else {
           currentUnitPrice = resolveProductUnitPrice(prod, item.quantity || 1);
@@ -78,16 +75,13 @@ const updateCart = async ({
     let itemPrice = 0;
 
     if (quantity > 0) {
-      // If variant_sku is provided, use variant-specific pricing (not affected by bulk price tiers)
+      // If variant_sku is provided, use variant-specific pricing (tier-aware)
       if (variant_sku && Array.isArray(itemData.variants)) {
         const variant = itemData.variants.find(v => v.sku === variant_sku);
         if (!variant) {
           throw new Error(`Variant with SKU '${variant_sku}' not found`);
         }
-        // Use variant's discounted price if available, otherwise use variant's regular price
-        itemPrice = variant.discounted_price !== null && variant.discounted_price !== undefined
-          ? parseFloat(variant.discounted_price.toString())
-          : parseFloat(variant.price.toString());
+        itemPrice = resolveProductUnitPrice(variant, quantity);
       } else {
         // Resolve unit price — if quantity matches a price tier, that tier's price applies;
         // otherwise the base (discounted_price / price) applies for any other quantity.

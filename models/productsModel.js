@@ -138,9 +138,24 @@ const ProductSchema = new mongoose.Schema(
         color: { type: String, trim: true, default: null },
         weight_in_grams: { type: Number, min: 0, default: null },
         expiry_date: { type: Date, default: null },
+        price_tiers: [
+          {
+            quantity: { type: Number, required: true, min: 2 },
+            price: {
+              type: mongoose.Schema.Types.Decimal128,
+              required: true,
+              validate: {
+                validator: function (value) {
+                  return value >= 0;
+                },
+                message: "Tier price must be a non-negative number",
+              },
+            },
+          },
+        ],
       },
     ],
-    // Bulk/pack-size pricing for the base product (not available on variants).
+    // Bulk/pack-size pricing for the base product.
     // qty=1 is always implicitly priced at discounted_price (or price) — these are the additional pack sizes, e.g. { quantity: 4, price: 410 }.
     price_tiers: [
       {
@@ -175,6 +190,14 @@ ProductSchema.set("toJSON", {
         discounted_price: variant.discounted_price
           ? parseFloat(variant.discounted_price.toString())
           : variant.discounted_price,
+        price_tiers: Array.isArray(variant.price_tiers)
+          ? variant.price_tiers
+              .map((tier) => ({
+                ...tier,
+                price: parseFloat(tier.price.toString()),
+              }))
+              .sort((a, b) => a.quantity - b.quantity)
+          : variant.price_tiers,
       }));
     }
     if (Array.isArray(ret.price_tiers)) {
@@ -197,6 +220,29 @@ ProductSchema.pre("validate", function (next) {
       return next(
         new Error("Each variant sku must be unique within the product.")
       );
+    }
+
+    for (const variant of this.variants) {
+      if (Array.isArray(variant.price_tiers)) {
+        for (const tier of variant.price_tiers) {
+          if (!Number.isInteger(tier.quantity) || tier.quantity < 2) {
+            return next(
+              new Error(
+                `Each price tier quantity must be an integer of 2 or more (variant sku: ${variant.sku || "unknown"}).`
+              )
+            );
+          }
+        }
+        const quantities = variant.price_tiers.map((t) => t.quantity);
+        const uniqueQuantities = new Set(quantities);
+        if (quantities.length !== uniqueQuantities.size) {
+          return next(
+            new Error(
+              `Each price tier quantity must be unique within variant ${variant.sku || "unknown"}.`
+            )
+          );
+        }
+      }
     }
   }
   if (Array.isArray(this.price_tiers)) {

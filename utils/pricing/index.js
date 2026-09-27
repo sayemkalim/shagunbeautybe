@@ -9,15 +9,15 @@ const getProductBasePrice = (product) =>
     : parseDecimal(product.price);
 
 const hasPriceTiers = (product) =>
-  Array.isArray(product.price_tiers) && product.price_tiers.length > 0;
+  Array.isArray(product?.price_tiers) && product.price_tiers.length > 0;
 
 /**
- * The purchasable quantity/price menu for a base (non-variant) product that HAS bulk price tiers defined.
+ * The purchasable quantity/price menu for a base product or variant that HAS bulk price tiers defined.
  * qty=1 is always implicitly priced at discounted_price (falling back to price) — price_tiers only
- * carry the additional bulk pack sizes (qty >= 2). Not meaningful for products with no tiers — see
- * resolveProductUnitPrice for that case (any quantity is allowed there).
+ * carry the additional bulk pack sizes (qty >= 2).
  */
 const getProductQuantityOptions = (product) => {
+  if (!product) return [];
   const options = [{ quantity: 1, price: getProductBasePrice(product) }];
 
   if (Array.isArray(product.price_tiers)) {
@@ -30,14 +30,13 @@ const getProductQuantityOptions = (product) => {
 };
 
 /**
- * Resolves the per-unit price for a base (non-variant) product at a given quantity.
- * - No price_tiers defined (the vast majority of existing products): any positive integer quantity
- *   is allowed at the flat base price — identical to the pre-tiered-pricing behavior.
- * - price_tiers defined: quantity must exactly match qty=1 or one of the defined tier quantities;
- *   returns null for anything else (caller should reject).
+ * Resolves the per-unit price for a base product or variant at a given quantity.
+ * - No price_tiers defined: any positive integer quantity is allowed at the flat base price.
+ * - price_tiers defined: if quantity matches a defined tier, that tier's price is returned;
+ *   otherwise falls back to the base price.
  */
 const resolveProductUnitPrice = (product, quantity) => {
-  if (!Number.isInteger(quantity) || quantity < 1) return null;
+  if (!product || !Number.isInteger(quantity) || quantity < 1) return null;
 
   if (hasPriceTiers(product)) {
     const match = getProductQuantityOptions(product).find(
@@ -55,4 +54,8 @@ module.exports = {
   hasPriceTiers,
   getProductQuantityOptions,
   resolveProductUnitPrice,
+  // Variant helper aliases
+  hasVariantPriceTiers: hasPriceTiers,
+  getVariantQuantityOptions: getProductQuantityOptions,
+  resolveVariantUnitPrice: resolveProductUnitPrice,
 };

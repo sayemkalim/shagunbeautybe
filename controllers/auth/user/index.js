@@ -2,8 +2,20 @@ const { asyncHandler } = require("../../../common/asyncHandler");
 const User = require("../../../models/userModel");
 const ApiResponse = require("../../../utils/ApiResponse");
 const { generateAccessToken } = require("../../../utils/auth");
-const { sendWelcomeEmail } = require("../../../utils/email/directEmailService");
+const {
+  sendWelcomeEmail,
+  sendForgotPasswordEmail,
+} = require("../../../utils/email/directEmailService");
 const { OAuth2Client } = require("google-auth-library");
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+
+const maskEmail = (email) => {
+  if (!email || typeof email !== "string" || !email.includes("@")) return "";
+  const [localPart, domain] = email.split("@");
+  if (localPart.length <= 2) return `${localPart[0]}*@${domain}`;
+  return `${localPart[0]}${"*".repeat(localPart.length - 2)}${localPart[localPart.length - 1]}@${domain}`;
+};
 
 const PIN_REGEX = /^\d{4}$/;
 const MAX_PIN_ATTEMPTS = 10;
@@ -374,6 +386,273 @@ const googleLogin = asyncHandler(async (req, res) => {
   }
 });
 
+/**
+ * Step 1: Forgot PIN / Password
+ * Request OTP to reset PIN. Sends 6-digit OTP to the email registered during registration.
+ */
+const forgotPin = asyncHandler(async (req, res) => {
+  const { phoneNumber, phone, email } = req.body;
+  const phoneInput = phoneNumber || phone;
+
+  if (!phoneInput && !email) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Phone number or email is required", false));
+  }
+
+  const query = phoneInput ? { phone: phoneInput } : { email: email.toLowerCase().trim() };
+  const user = await User.findOne(query);
+
+  if (!user) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "User not found with provided details", false));
+  }
+
+  if (!user.pin) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "User registration is not complete yet", false));
+  }
+
+  if (!user.email) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "No registered email found for this account. Please contact customer support.",
+          false
+        )
+      );
+  }
+
+  // Generate 6-digit secure OTP
+  const otp = crypto.randomInt(100000, 1000000).toString();
+
+  user.resetPinOtp = otp;
+  user.resetPinOtpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  user.resetPinAttempts = 0;
+  await user.save();
+
+  // Send email asynchronously
+  setImmediate(async () => {
+    try {
+      await sendForgotPasswordEmail({
+        user: user.toObject(),
+        otp,
+      });
+    } catch (error) {
+      console.error("❌ Failed to send PIN reset email:", error.message);
+    }
+  });
+
+  const maskedEmail = maskEmail(user.email);
+
+  res.json(
+    new ApiResponse(
+      200,
+      {
+        email: maskedEmail,
+        phone: user.phone,
+      },
+      `Verification code sent to your registered email (${maskedEmail})`,
+      true
+    )
+  );
+});
+
+/**
+ * Step 2: Verify Reset OTP (optional standalone step)
+ * Verifies the 6-digit OTP. Returns a signed resetToken.
+ */
+const verifyResetOtp = asyncHandler(async (req, res) => {
+  const { phoneNumber, phone, email, otp } = req.body;
+  const phoneInput = phoneNumber || phone;
+
+  if ((!phoneInput && !email) || !otp) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Phone/email and OTP are required", false));
+  }
+
+  const query = phoneInput ? { phone: phoneInput } : { email: email.toLowerCase().trim() };
+  const user = await User.findOne(query);
+
+  if (!user) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "User not found", false));
+  }
+
+  if (user.resetPinAttempts >= 5) {
+    return res
+      .status(429)
+      .json(
+        new ApiResponse(
+          429,
+          null,
+          "Too many incorrect attempts. Please request a new OTP.",
+          false
+        )
+      );
+  }
+
+  const now = new Date();
+  if (!user.resetPinOtp || !user.resetPinOtpExpires || now > user.resetPinOtpExpires) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "OTP has expired or is invalid. Please request a new one.",
+          false
+        )
+      );
+  }
+
+  if (user.resetPinOtp !== otp.toString().trim()) {
+    user.resetPinAttempts = (user.resetPinAttempts || 0) + 1;
+    await user.save();
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid verification code", false));
+  }
+
+  const resetToken = jwt.sign(
+    { id: user._id, purpose: "reset_pin" },
+    process.env.JWT_SECRET,
+    { expiresIn: "15m" }
+  );
+
+  res.json(
+    new ApiResponse(
+      200,
+      {
+        resetToken,
+        phone: user.phone,
+        email: user.email,
+      },
+      "OTP verified successfully. You can now set your new PIN.",
+      true
+    )
+  );
+});
+
+/**
+ * Step 3: Reset PIN
+ * Accepts { phoneNumber, otp, newPin } OR { resetToken, newPin }.
+ * Validates 4-digit PIN, updates PIN, clears reset OTP, and returns accessToken.
+ */
+const resetPin = asyncHandler(async (req, res) => {
+  const { phoneNumber, phone, email, otp, resetToken, newPin } = req.body;
+  const pinInput = newPin || req.body.pin;
+
+  if (!pinInput) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "New PIN is required", false));
+  }
+
+  if (!PIN_REGEX.test(pinInput)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "PIN must be exactly 4 digits", false));
+  }
+
+  let user;
+
+  if (resetToken) {
+    try {
+      const decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+      if (decoded.purpose !== "reset_pin") {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Invalid reset token", false));
+      }
+      user = await User.findById(decoded.id);
+    } catch (err) {
+      return res
+        .status(401)
+        .json(new ApiResponse(401, null, "Reset token has expired or is invalid", false));
+    }
+  } else {
+    const phoneInput = phoneNumber || phone;
+    if ((!phoneInput && !email) || !otp) {
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            "Phone/email and OTP (or resetToken) are required",
+            false
+          )
+        );
+    }
+
+    const query = phoneInput ? { phone: phoneInput } : { email: email.toLowerCase().trim() };
+    user = await User.findOne(query);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json(new ApiResponse(404, null, "User not found", false));
+    }
+
+    const now = new Date();
+    if (!user.resetPinOtp || !user.resetPinOtpExpires || now > user.resetPinOtpExpires) {
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            "OTP has expired or is invalid. Please request a new one.",
+            false
+          )
+        );
+    }
+
+    if (user.resetPinOtp !== otp.toString().trim()) {
+      user.resetPinAttempts = (user.resetPinAttempts || 0) + 1;
+      await user.save();
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Invalid verification code", false));
+    }
+  }
+
+  if (!user) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "User not found", false));
+  }
+
+  // Update PIN and reset attempts/lockouts
+  user.pin = pinInput;
+  user.resetPinOtp = null;
+  user.resetPinOtpExpires = null;
+  user.resetPinAttempts = 0;
+  user.pinAttempts = 0;
+  user.pinAttemptsWindowStart = null;
+  await user.save();
+
+  const accessToken = generateAccessToken(user._id);
+
+  const data = {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    token: accessToken,
+  };
+
+  res.json(new ApiResponse(200, data, "PIN updated successfully. Logged in.", true));
+});
+
 module.exports = {
   getAllUsers,
   registerUser,
@@ -383,4 +662,7 @@ module.exports = {
   deleteUser,
   getUserById,
   googleLogin,
+  forgotPin,
+  verifyResetOtp,
+  resetPin,
 };

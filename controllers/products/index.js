@@ -189,6 +189,21 @@ const getAllProducts = asyncHandler(async (req, res) => {
                   typeof variant.discounted_price === "object"
                 ? parseFloat(variant.discounted_price.toString())
                 : variant.discounted_price,
+            price_tiers: Array.isArray(variant.price_tiers)
+              ? variant.price_tiers
+                  .map((tier) => ({
+                    quantity: Number(tier.quantity),
+                    price:
+                      tier.price &&
+                      typeof tier.price === "object" &&
+                      tier.price.$numberDecimal
+                        ? parseFloat(tier.price.$numberDecimal)
+                        : tier.price && typeof tier.price === "object"
+                        ? parseFloat(tier.price.toString())
+                        : parseFloat(tier.price),
+                  }))
+                  .sort((a, b) => a.quantity - b.quantity)
+              : variant.price_tiers,
           };
         });
       }
@@ -311,6 +326,24 @@ const createProduct = asyncHandler(async (req, res) => {
   }
 
   if (Array.isArray(variants)) {
+    for (let idx = 0; idx < variants.length; idx++) {
+      const variant = variants[idx];
+      if (variant.price_tiers !== undefined) {
+        const vTierRes = parsePriceTiers(variant.price_tiers);
+        if (vTierRes.error) {
+          return res.status(400).json(
+            new ApiResponse(
+              400,
+              null,
+              `Variant ${variant.sku || idx + 1}: ${vTierRes.error}`,
+              false
+            )
+          );
+        }
+        variant.price_tiers = vTierRes.value || [];
+      }
+    }
+
     variants = await Promise.all(
       variants.map(async (variant, idx) => {
         const variantImageFiles = files.filter(
@@ -440,6 +473,30 @@ const updateProduct = asyncHandler(async (req, res) => {
 
   // For each variant, keep URLs, upload only new files, preserve existing variant images
   if (Array.isArray(variants)) {
+    for (let idx = 0; idx < variants.length; idx++) {
+      const variant = variants[idx];
+      const existingVariant = product.variants?.find(
+        (v) => (variant.sku && v.sku === variant.sku) || (variant._id && v._id?.toString() === variant._id?.toString())
+      ) || product.variants?.[idx];
+
+      if (variant.price_tiers !== undefined) {
+        const vTierRes = parsePriceTiers(variant.price_tiers);
+        if (vTierRes.error) {
+          return res.status(400).json(
+            new ApiResponse(
+              400,
+              null,
+              `Variant ${variant.sku || idx + 1}: ${vTierRes.error}`,
+              false
+            )
+          );
+        }
+        variant.price_tiers = vTierRes.value || [];
+      } else if (existingVariant && existingVariant.price_tiers) {
+        variant.price_tiers = existingVariant.price_tiers;
+      }
+    }
+
     variants = await Promise.all(
       variants.map(async (variant, idx) => {
         const existingVariant = product.variants?.find(
@@ -836,6 +893,7 @@ const exportProducts = asyncHandler(async (req, res) => {
         variant_attributes: JSON.stringify(variant.attributes || {}),
         variant_price: handlePrice(variant.price),
         variant_discounted_price: handlePrice(variant.discounted_price),
+        variant_price_tiers: Array.isArray(variant.price_tiers) ? JSON.stringify(variant.price_tiers) : "",
         variant_inventory: variant.inventory || "",
         variant_expiry_date: variant.expiry_date ? new Date(variant.expiry_date).toISOString().split('T')[0] : "",
         variant_images: Array.isArray(variant.images)
@@ -851,6 +909,7 @@ const exportProducts = asyncHandler(async (req, res) => {
           variant_attributes: "",
           variant_price: "",
           variant_discounted_price: "",
+          variant_price_tiers: "",
           variant_inventory: "",
           variant_expiry_date: "",
           variant_images: "",
@@ -948,6 +1007,7 @@ const generateSampleFile = asyncHandler(async (req, res) => {
       variant_attributes: "Variant Attributes (Optional) - JSON format",
       variant_price: "Variant Price (Required if product has variants)",
       variant_discounted_price: "Variant Discounted Price (Optional)",
+      variant_price_tiers: "Variant Price Tiers (Optional) - JSON format: [{\"quantity\": 4, \"price\": 410}]",
       variant_inventory: "Variant Inventory (Optional)",
       variant_expiry_date: "Variant Expiry Date (Optional) - YYYY-MM-DD format",
       variant_images:
@@ -1079,6 +1139,7 @@ const generateSampleFile = asyncHandler(async (req, res) => {
           variant_attributes: "Variant Attributes (Optional) - JSON",
           variant_price: "Variant Price (Required if variants)",
           variant_discounted_price: "Variant Discounted Price (Optional)",
+          variant_price_tiers: "Variant Price Tiers (Optional) - JSON format",
           variant_inventory: "Variant Inventory (Optional)",
           variant_expiry_date: "Variant Expiry Date (Optional) - YYYY-MM-DD format",
           variant_images: "Variant Images (Optional) - Pipe separated",
@@ -1107,6 +1168,7 @@ const generateSampleFile = asyncHandler(async (req, res) => {
           variant_attributes: "",
           variant_price: "",
           variant_discounted_price: "",
+          variant_price_tiers: "",
           variant_inventory: "",
           variant_expiry_date: "",
           variant_images: "",

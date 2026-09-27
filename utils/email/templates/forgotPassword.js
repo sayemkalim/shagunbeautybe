@@ -1,10 +1,13 @@
 /**
- * Generate forgot password email
+ * Generate forgot password / PIN reset email
  * @param {Object} user - User object
- * @param {string} newPassword - New generated password
+ * @param {string} code - New generated password or 6-digit OTP
+ * @param {Object} [options] - Optional settings
+ * @param {boolean} [options.isOtp] - Whether code is an OTP for PIN reset
  * @returns {string} HTML email content
  */
-const generateForgotPasswordEmail = (user, newPassword) => {
+const generateForgotPasswordEmail = (user, code, options = {}) => {
+  const isOtp = options.isOtp !== undefined ? options.isOtp : /^\d{6}$/.test(code);
   const baseUrl = process.env.APP_URL || 'http://localhost:8000';
   const resetDate = new Date().toLocaleDateString("en-US", {
     year: "numeric",
@@ -13,6 +16,27 @@ const generateForgotPasswordEmail = (user, newPassword) => {
     hour: "2-digit",
     minute: "2-digit",
   });
+
+  const headerTitle = isOtp ? "Reset Your PIN 🔐" : "Password Reset 🔐";
+  const headerSubtitle = isOtp
+    ? "Use the verification code below to reset your login PIN"
+    : "Your password has been successfully reset";
+  const boxTitle = isOtp
+    ? "Your 6-Digit Verification Code (OTP)"
+    : "Your New Temporary Password";
+  const letterSpacing = isOtp ? "6px" : "2px";
+  const messageText = isOtp
+    ? "We received a request to reset your login PIN. Please use the verification code below to set your new 4-digit security PIN."
+    : "We received a request to reset your password. Your account has been secured with a new temporary password.";
+  const securitySteps = isOtp
+    ? `1. Enter this 6-digit verification code on the reset screen<br>
+       2. Enter your new 4-digit security PIN<br>
+       3. This code is valid for 10 minutes only<br>
+       4. Never share your OTP or PIN with anyone`
+    : `1. Use the password above to log in to your account<br>
+       2. Change your password immediately after logging in<br>
+       3. Choose a strong, unique password<br>
+       4. Do not share this password with anyone`;
 
   return `
     <!DOCTYPE html>
@@ -23,7 +47,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
       <meta http-equiv="X-UA-Compatible" content="IE=edge" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <link href="https://fonts.googleapis.com/css?family=Outfit:ital,wght@0,400;0,500;0,600" rel="stylesheet" />
-      <title>Password Reset - Shagun Beauty</title>
+      <title>${isOtp ? "PIN Reset Code - Shagun Beauty" : "Password Reset - Shagun Beauty"}</title>
       <style>
         html, body { margin: 0 !important; padding: 0 !important; min-height: 100% !important; width: 100% !important; -webkit-font-smoothing: antialiased; }
         * { -ms-text-size-adjust: 100%; }
@@ -62,7 +86,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 12px 0px;">
                                     <div style="line-height: 128%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 38px; font-weight: 500; color: #ffffff; text-align: center;">
-                                      Password Reset 🔐
+                                      ${headerTitle}
                                     </div>
                                   </td>
                                 </tr>
@@ -73,7 +97,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 20px 0px;">
                                     <div style="line-height: 156%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 19px; font-weight: normal; color: #ffffffcc; text-align: center;">
-                                      Your password has been successfully reset
+                                      ${headerSubtitle}
                                     </div>
                                   </td>
                                 </tr>
@@ -114,13 +138,13 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                                 <tr>
                                   <td valign="top" style="padding: 0px 0px 24px 0px;">
                                     <div style="line-height: 156%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 16px; font-weight: normal; color: #2a1e19;">
-                                      We received a request to reset your password. Your account has been secured with a new temporary password.
+                                      ${messageText}
                                     </div>
                                   </td>
                                 </tr>
                               </table>
                               
-                              <!-- New Password Box -->
+                              <!-- Code / Password Box -->
                               <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
                                 <tr>
                                   <td style="padding: 28px; background-color: #fcedd0; border-radius: 12px; border-left: 4px solid #ffcb65;">
@@ -128,14 +152,14 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                                       <tr>
                                         <td align="center" valign="top" style="padding: 0px 0px 12px 0px;">
                                           <div style="line-height: 140%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 600; color: #2a1e19; text-transform: uppercase;">
-                                            Your New Temporary Password
+                                            ${boxTitle}
                                           </div>
                                         </td>
                                       </tr>
                                       <tr>
                                         <td align="center" valign="top" style="padding: 12px 20px; background-color: #ffffff; border-radius: 8px;">
-                                          <div style="line-height: 140%; letter-spacing: 2px; font-family: 'Courier New', monospace; font-size: 24px; font-weight: 700; color: #1a110c;">
-                                            ${newPassword}
+                                          <div style="line-height: 140%; letter-spacing: ${letterSpacing}; font-family: 'Courier New', monospace; font-size: 30px; font-weight: 700; color: #1a110c;">
+                                            ${code}
                                           </div>
                                         </td>
                                       </tr>
@@ -159,10 +183,7 @@ const generateForgotPasswordEmail = (user, newPassword) => {
                                       <tr>
                                         <td valign="top" style="padding: 0px 0px 8px 0px;">
                                           <div style="line-height: 156%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 14px; font-weight: normal; color: #2a1e19;">
-                                            1. Use the password above to log in to your account<br>
-                                            2. Change your password immediately after logging in<br>
-                                            3. Choose a strong, unique password<br>
-                                            4. Do not share this password with anyone
+                                            ${securitySteps}
                                           </div>
                                         </td>
                                       </tr>

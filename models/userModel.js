@@ -27,6 +27,9 @@ const UserSchema = new mongoose.Schema(
       default: "local"
     },
     profilePicture: { type: String, default: null },
+    resetPinOtp: { type: String, default: null },
+    resetPinOtpExpires: { type: Date, default: null },
+    resetPinAttempts: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

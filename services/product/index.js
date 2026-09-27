@@ -507,6 +507,21 @@ const getProductRecommendations = async (productId, options = {}) => {
         discounted_price: product.discounted_price && typeof product.discounted_price === 'object' && product.discounted_price.$numberDecimal
           ? parseFloat(product.discounted_price.$numberDecimal)
           : (product.discounted_price && typeof product.discounted_price === 'object' ? parseFloat(product.discounted_price.toString()) : product.discounted_price),
+        price_tiers: Array.isArray(product.price_tiers)
+          ? product.price_tiers
+              .map((tier) => ({
+                quantity: Number(tier.quantity),
+                price:
+                  tier.price &&
+                  typeof tier.price === "object" &&
+                  tier.price.$numberDecimal
+                    ? parseFloat(tier.price.$numberDecimal)
+                    : tier.price && typeof tier.price === "object"
+                    ? parseFloat(tier.price.toString())
+                    : parseFloat(tier.price),
+              }))
+              .sort((a, b) => a.quantity - b.quantity)
+          : product.price_tiers,
       };
 
       // Handle variants
@@ -519,6 +534,21 @@ const getProductRecommendations = async (productId, options = {}) => {
           discounted_price: variant.discounted_price && typeof variant.discounted_price === 'object' && variant.discounted_price.$numberDecimal
             ? parseFloat(variant.discounted_price.$numberDecimal)
             : (variant.discounted_price && typeof variant.discounted_price === 'object' ? parseFloat(variant.discounted_price.toString()) : variant.discounted_price),
+          price_tiers: Array.isArray(variant.price_tiers)
+            ? variant.price_tiers
+                .map((tier) => ({
+                  quantity: Number(tier.quantity),
+                  price:
+                    tier.price &&
+                    typeof tier.price === "object" &&
+                    tier.price.$numberDecimal
+                      ? parseFloat(tier.price.$numberDecimal)
+                      : tier.price && typeof tier.price === "object"
+                      ? parseFloat(tier.price.toString())
+                      : parseFloat(tier.price),
+                }))
+                .sort((a, b) => a.quantity - b.quantity)
+            : variant.price_tiers,
         }));
       }
 
