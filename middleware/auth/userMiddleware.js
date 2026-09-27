@@ -31,6 +31,24 @@ const authenticateRole = () => async (req, res, next) => {
   }
 };
 
+const optionalUser = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id).select("-pin");
+      if (user) {
+        req.user = user;
+      }
+    }
+    next();
+  } catch (error) {
+    // If token is invalid or missing, proceed without req.user
+    next();
+  }
+};
+
 module.exports = {
   user: authenticateRole(),
+  optionalUser,
 };

@@ -300,19 +300,28 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
         .text(`Mode: ${order.paymentMode || "-"}`, PAGE_MARGIN, y)
         .text(`Status: ${String(order.paymentStatus || "-").toUpperCase()}`, PAGE_MARGIN, doc.y + 2);
 
-      const qrSize = 70;
-      const captionWidth = 110;
-      const captionX = PAGE_MARGIN + PAGE_WIDTH - captionWidth;
-      const qrX = captionX + (captionWidth - qrSize) / 2;
-      doc.image(qrCodeBuffer, qrX, paymentBlockTop, { width: qrSize, height: qrSize });
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(9)
-        .fillColor(TEXT_DARK)
-        .text("Scan & Pay via UPI", captionX, paymentBlockTop + qrSize + 4, {
-          width: captionWidth,
-          align: "center",
-        });
+      if (order.paymentId) {
+        doc.text(`Transaction ID: ${order.paymentId}`, PAGE_MARGIN, doc.y + 2);
+      }
+      if (order.paidAt) {
+        doc.text(`Paid At: ${new Date(order.paidAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`, PAGE_MARGIN, doc.y + 2);
+      }
+
+      if (order.paymentStatus !== "paid") {
+        const qrSize = 70;
+        const captionWidth = 110;
+        const captionX = PAGE_MARGIN + PAGE_WIDTH - captionWidth;
+        const qrX = captionX + (captionWidth - qrSize) / 2;
+        doc.image(qrCodeBuffer, qrX, paymentBlockTop, { width: qrSize, height: qrSize });
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor(TEXT_DARK)
+          .text("Scan & Pay via UPI", captionX, paymentBlockTop + qrSize + 4, {
+            width: captionWidth,
+            align: "center",
+          });
+      }
       // Phone number removed from UPI caption as well
 
       // ---- Footer ----

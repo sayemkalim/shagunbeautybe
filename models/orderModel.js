@@ -207,7 +207,16 @@ const OrderSchema = new mongoose.Schema({
   // createOrder/createGuestOrder controllers instead of here.
   paymentMode: {
     type: String,
-    enum: ["COD", "UPI"],
+    enum: ["COD", "UPI", "ONLINE"],
+    default: null
+  },
+  razorpayOrderId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  razorpaySignature: {
+    type: String,
     default: null
   },
   paymentLink: {
@@ -216,7 +225,8 @@ const OrderSchema = new mongoose.Schema({
   },
   paymentLinkId: {
     type: String,
-    default: null
+    default: null,
+    index: true
   },
   paymentStatus: {
     type: String,

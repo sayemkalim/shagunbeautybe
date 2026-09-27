@@ -333,11 +333,16 @@ const createGuestOrder = asyncHandler(async (req, res) => {
       );
   }
 
-  if (!["COD", "UPI"].includes(paymentMode)) {
+  if (!["COD", "UPI", "ONLINE"].includes(paymentMode)) {
     return res
       .status(400)
       .json(
-        new ApiResponse(400, null, "paymentMode must be 'COD' or 'UPI'", false),
+        new ApiResponse(
+          400,
+          null,
+          "paymentMode must be 'COD', 'UPI', or 'ONLINE'",
+          false,
+        ),
       );
   }
 
@@ -677,10 +682,17 @@ const createOrder = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const { cartId, addressId, couponCode, paymentMode, utr_number, selectedItemIds } = req.body;
 
-  if (!["COD", "UPI"].includes(paymentMode)) {
+  if (!["COD", "UPI", "ONLINE"].includes(paymentMode)) {
     return res
       .status(400)
-      .json(new ApiResponse(400, null, "paymentMode must be 'COD' or 'UPI'", false));
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "paymentMode must be 'COD', 'UPI', or 'ONLINE'",
+          false,
+        ),
+      );
   }
 
   if (
@@ -2794,26 +2806,37 @@ const generatePaymentLinks = asyncHandler(async (req, res) => {
     // Convert amount to paise (Razorpay expects amount in smallest currency unit)
     const amountInPaise = Math.round(numericAmount * 100);
 
+    // Resolve customer email for payment link
+    let customerEmail = "";
+    if (order.user) {
+      const orderUser = await User.findById(order.user).select("email");
+      if (orderUser) customerEmail = orderUser.email || "";
+    } else if (order.guestInfo?.email) {
+      customerEmail = order.guestInfo.email;
+    } else if (order.address?.email) {
+      customerEmail = order.address.email;
+    }
+
     // Create payment link using Razorpay
     const paymentLinkOptions = {
       amount: amountInPaise,
       currency: "INR",
       description: `Payment for Order #${orderId}`,
       customer: {
-        name: order.address.name || "Customer",
-        contact: order.address.mobile || "",
-        email: req.user?.email || "",
+        name: order.address?.name || "Customer",
+        contact: order.address?.mobile || "",
+        email: customerEmail,
       },
       notify: {
         sms: true,
-        email: true,
+        email: !!customerEmail,
       },
       reminder_enable: true,
     };
 
     const paymentLink = await razorpay.paymentLink.create(paymentLinkOptions);
 
-    // Update h payorder witment link information
+    // Update order with payment link information
     order.paymentLink = paymentLink.short_url;
     order.paymentLinkId = paymentLink.id;
     await order.save();
@@ -2861,12 +2884,23 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
 
   try {
     const signature = req.headers["x-razorpay-signature"];
-    const body = JSON.stringify(req.body);
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    // Verify webhook signature
+    if (!webhookSecret) {
+      console.error("RAZORPAY_WEBHOOK_SECRET is not configured");
+      return res.status(500).json({ error: "Webhook secret not configured" });
+    }
+
+    if (!signature) {
+      console.error("Missing x-razorpay-signature header");
+      return res.status(400).json({ error: "Missing signature header" });
+    }
+
+    // Verify webhook signature using raw body buffer if available, fallback to JSON.stringify
+    const rawPayload = req.rawBody ? req.rawBody : JSON.stringify(req.body);
     const expectedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
-      .update(body)
+      .createHmac("sha256", webhookSecret)
+      .update(rawPayload)
       .digest("hex");
 
     if (signature !== expectedSignature) {
@@ -2875,80 +2909,445 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
     }
 
     const event = req.body;
-    console.log("Received webhook event:", event.event);
+    const eventType = event?.event;
+    console.log("Received Razorpay webhook event:", eventType);
 
-    // Handle payment captured event
-    if (event.event === "payment.captured") {
-      const payment = event.payload.payment.entity;
-      const paymentLink = event.payload.payment_link?.entity;
+    // Handle payment captured / order paid / payment_link.paid events
+    if (
+      eventType === "payment.captured" ||
+      eventType === "order.paid" ||
+      eventType === "payment_link.paid"
+    ) {
+      const payment = event.payload?.payment?.entity;
+      const paymentLink = event.payload?.payment_link?.entity;
+      const rzpOrderEntity = event.payload?.order?.entity;
 
-      if (paymentLink) {
-        // Find order by payment link ID
-        const order = await Order.findOne({ paymentLinkId: paymentLink.id });
+      let order = null;
 
-        if (order) {
-          // Verify payment amount matches order amount
-          const orderAmountInPaise = Math.round(
-            parseFloat(order.finalTotalAmount.toString()) * 100,
-          );
+      if (paymentLink?.id) {
+        order = await Order.findOne({ paymentLinkId: paymentLink.id });
+      }
 
-          if (
-            payment.amount === orderAmountInPaise &&
-            payment.status === "captured"
-          ) {
-            // Update order with payment details
-            order.paymentStatus = "paid";
+      if (!order && payment?.order_id) {
+        order = await Order.findOne({ razorpayOrderId: payment.order_id });
+      }
+
+      if (!order && rzpOrderEntity?.id) {
+        order = await Order.findOne({ razorpayOrderId: rzpOrderEntity.id });
+      }
+
+      if (
+        !order &&
+        payment?.notes?.orderId &&
+        mongoose.Types.ObjectId.isValid(payment.notes.orderId)
+      ) {
+        order = await Order.findById(payment.notes.orderId);
+      }
+
+      if (
+        !order &&
+        rzpOrderEntity?.notes?.orderId &&
+        mongoose.Types.ObjectId.isValid(rzpOrderEntity.notes.orderId)
+      ) {
+        order = await Order.findById(rzpOrderEntity.notes.orderId);
+      }
+
+      if (order) {
+        const orderAmountInPaise = Math.round(
+          parseFloat(order.finalTotalAmount.toString()) * 100,
+        );
+        const paidAmount =
+          payment?.amount || rzpOrderEntity?.amount_paid || orderAmountInPaise;
+
+        if (paidAmount === orderAmountInPaise) {
+          order.paymentStatus = "paid";
+          if (payment) {
             order.paymentId = payment.id;
-            order.paymentMethod = payment.method;
-            order.paidAt = new Date();
+            order.paymentMethod = payment.method || order.paymentMethod;
+          }
+          if (payment?.order_id) {
+            order.razorpayOrderId = payment.order_id;
+          }
+          order.paymentMode = "ONLINE";
+          order.paidAt = new Date();
 
-            // Update order status to confirmed if it's still pending
-            if (order.status === "pending") {
-              order.status = "confirmed";
-            }
+          if (order.status === "pending") {
+            order.status = "confirmed";
+          }
 
-            await order.save();
+          await order.save();
 
-            console.log(
-              `Payment captured for order ${order._id}, payment ID: ${payment.id}`,
-            );
-          } else {
+          try {
+            await ensureOrderBillGenerated(order);
+          } catch (billError) {
             console.error(
-              `Payment amount mismatch for order ${order._id}. Expected: ${orderAmountInPaise}, Received: ${payment.amount}`,
+              `Bill generation failed for order ${order._id}:`,
+              billError.message,
             );
           }
+
+          console.log(`Payment confirmed via webhook for order ${order._id}`);
         } else {
           console.error(
-            `Order not found for payment link ID: ${paymentLink.id}`,
+            `Payment amount mismatch for order ${order._id}. Expected: ${orderAmountInPaise}, Received: ${paidAmount}`,
           );
         }
+      } else {
+        console.error(
+          `Order not found for webhook event ${eventType}. Payment ID: ${payment?.id}, Razorpay Order ID: ${payment?.order_id || rzpOrderEntity?.id}`,
+        );
       }
     }
 
     // Handle payment failed event
-    if (event.event === "payment.failed") {
-      const payment = event.payload.payment.entity;
-      const paymentLink = event.payload.payment_link?.entity;
+    if (eventType === "payment.failed") {
+      const payment = event.payload?.payment?.entity;
+      const paymentLink = event.payload?.payment_link?.entity;
 
-      if (paymentLink) {
-        const order = await Order.findOne({ paymentLinkId: paymentLink.id });
+      let order = null;
+      if (paymentLink?.id) {
+        order = await Order.findOne({ paymentLinkId: paymentLink.id });
+      }
+      if (!order && payment?.order_id) {
+        order = await Order.findOne({ razorpayOrderId: payment.order_id });
+      }
+      if (
+        !order &&
+        payment?.notes?.orderId &&
+        mongoose.Types.ObjectId.isValid(payment.notes.orderId)
+      ) {
+        order = await Order.findById(payment.notes.orderId);
+      }
 
-        if (order) {
-          order.paymentStatus = "failed";
-          await order.save();
-
-          console.log(
-            `Payment failed for order ${order._id}, payment ID: ${payment.id}`,
-          );
-        }
+      if (order && order.paymentStatus !== "paid") {
+        order.paymentStatus = "failed";
+        await order.save();
+        console.log(
+          `Payment marked failed for order ${order._id}, payment ID: ${payment?.id}`,
+        );
       }
     }
 
-    res.status(200).json({ status: "success" });
+    return res.status(200).json({ status: "success" });
   } catch (error) {
     console.error("Webhook processing error:", error);
-    res.status(500).json({ error: "Webhook processing failed" });
+    return res.status(500).json({ error: "Webhook processing failed" });
   }
+});
+
+const createRazorpayOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.body;
+
+  if (!orderId) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Order ID is required", false));
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID format", false));
+  }
+
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res
+        .status(404)
+        .json(new ApiResponse(404, null, "Order not found", false));
+    }
+
+    // Security check: if order belongs to a registered user, caller MUST be that user
+    if (order.user) {
+      if (!req.user || order.user.toString() !== req.user._id.toString()) {
+        return res
+          .status(403)
+          .json(
+            new ApiResponse(
+              403,
+              null,
+              "Unauthorized access to this order",
+              false,
+            ),
+          );
+      }
+    }
+
+    if (order.status === "cancelled") {
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            "Cannot create payment for a cancelled order",
+            false,
+          ),
+        );
+    }
+
+    if (order.paymentStatus === "paid") {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Order has already been paid", false));
+    }
+
+    // Convert amount to paise
+    const amountInPaise = Math.round(
+      parseFloat(order.finalTotalAmount.toString()) * 100,
+    );
+
+    if (isNaN(amountInPaise) || amountInPaise <= 0) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Invalid order total amount", false));
+    }
+
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    if (!keyId) {
+      return res
+        .status(500)
+        .json(
+          new ApiResponse(
+            500,
+            null,
+            "Razorpay key is not configured on server",
+            false,
+          ),
+        );
+    }
+
+    // Resolve customer email
+    let customerEmail =
+      req.user?.email || order.guestInfo?.email || order.address?.email || "";
+    if (!customerEmail && order.user) {
+      const orderUser = await User.findById(order.user).select("email");
+      if (orderUser) customerEmail = orderUser.email || "";
+    }
+
+    const rzpOrderOptions = {
+      amount: amountInPaise,
+      currency: "INR",
+      receipt: `rcpt_${order._id.toString().slice(-20)}`,
+      notes: {
+        orderId: order._id.toString(),
+        userId: req.user?._id ? req.user._id.toString() : "guest",
+      },
+    };
+
+    const rzpOrder = await razorpay.orders.create(rzpOrderOptions);
+
+    order.razorpayOrderId = rzpOrder.id;
+    order.paymentMode = "ONLINE";
+    await order.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          orderId: order._id,
+          razorpayOrderId: rzpOrder.id,
+          amount: rzpOrder.amount, // in paise
+          currency: rzpOrder.currency,
+          keyId: keyId,
+          customer: {
+            name: order.address?.name || "",
+            contact: order.address?.mobile || "",
+            email: customerEmail,
+          },
+        },
+        "Razorpay order created successfully",
+        true,
+      ),
+    );
+  } catch (error) {
+    console.error("Error creating Razorpay order:", error);
+    return res
+      .status(500)
+      .json(
+        new ApiResponse(
+          500,
+          null,
+          `Failed to create Razorpay order: ${error.message}`,
+          false,
+        ),
+      );
+  }
+});
+
+const verifyRazorpayPayment = asyncHandler(async (req, res) => {
+  const crypto = require("crypto");
+  const {
+    orderId,
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+  } = req.body;
+
+  if (
+    !orderId ||
+    !razorpay_order_id ||
+    !razorpay_payment_id ||
+    !razorpay_signature
+  ) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "orderId, razorpay_order_id, razorpay_payment_id, and razorpay_signature are required",
+          false,
+        ),
+      );
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID format", false));
+  }
+
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res
+        .status(404)
+        .json(new ApiResponse(404, null, "Order not found", false));
+    }
+
+    // Security check: if order belongs to a registered user, caller MUST be that user
+    if (order.user) {
+      if (!req.user || order.user.toString() !== req.user._id.toString()) {
+        return res
+          .status(403)
+          .json(
+            new ApiResponse(
+              403,
+              null,
+              "Unauthorized access to this order",
+              false,
+            ),
+          );
+      }
+    }
+
+    // Idempotent success if order is already marked as paid
+    if (order.paymentStatus === "paid") {
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          order,
+          "Payment already verified and order confirmed",
+          true,
+        ),
+      );
+    }
+
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keySecret) {
+      return res
+        .status(500)
+        .json(
+          new ApiResponse(
+            500,
+            null,
+            "Razorpay secret is not configured on server",
+            false,
+          ),
+        );
+    }
+
+    // Verify HMAC-SHA256 signature
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expectedSignature = crypto
+      .createHmac("sha256", keySecret)
+      .update(body)
+      .digest("hex");
+
+    if (expectedSignature !== razorpay_signature) {
+      console.error(
+        `Razorpay signature verification failed for order ${orderId}. Expected: ${expectedSignature}, Received: ${razorpay_signature}`,
+      );
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "Invalid payment signature", false));
+    }
+
+    // Optionally fetch payment details to store the payment method (upi, card, netbanking)
+    let paymentMethod = null;
+    try {
+      const paymentDetails = await razorpay.payments.fetch(razorpay_payment_id);
+      paymentMethod = paymentDetails?.method || null;
+    } catch (err) {
+      console.error(
+        "Could not fetch payment method from Razorpay:",
+        err.message,
+      );
+    }
+
+    order.paymentStatus = "paid";
+    order.paymentId = razorpay_payment_id;
+    order.razorpayOrderId = razorpay_order_id;
+    order.razorpaySignature = razorpay_signature;
+    order.paymentMode = "ONLINE";
+    if (paymentMethod) {
+      order.paymentMethod = paymentMethod;
+    }
+    order.paidAt = new Date();
+
+    if (order.status === "pending") {
+      order.status = "confirmed";
+    }
+
+    await order.save();
+
+    // Ensure order bill is generated
+    try {
+      await ensureOrderBillGenerated(order);
+    } catch (billError) {
+      console.error(
+        `Bill generation failed for order ${order._id}:`,
+        billError.message,
+      );
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "Payment verified and order confirmed successfully",
+        true,
+      ),
+    );
+  } catch (error) {
+    console.error("Error verifying payment signature:", error);
+    return res
+      .status(500)
+      .json(
+        new ApiResponse(
+          500,
+          null,
+          `Failed to verify payment: ${error.message}`,
+          false,
+        ),
+      );
+  }
+});
+
+const getRazorpayConfig = asyncHandler(async (req, res) => {
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        keyId: process.env.RAZORPAY_KEY_ID || null,
+        enabled: Boolean(process.env.RAZORPAY_KEY_ID),
+      },
+      "Razorpay config fetched successfully",
+      true,
+    ),
+  );
 });
 
 module.exports = {
@@ -2970,4 +3369,7 @@ module.exports = {
   getOrderEmailStatus,
   generatePaymentLinks,
   handlePaymentWebhook,
+  createRazorpayOrder,
+  verifyRazorpayPayment,
+  getRazorpayConfig,
 };

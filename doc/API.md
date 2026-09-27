@@ -1733,6 +1733,87 @@ Create a Razorpay payment link for an existing order (order id comes from the bo
 
 ---
 
+### GET /api/order/razorpay/config
+
+Fetch public Razorpay client configuration (Key ID and enabled status).
+
+**Auth**: Public / None.
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "keyId": "rzp_test_...",
+    "enabled": true
+  },
+  "message": "Razorpay config fetched successfully",
+  "success": true
+}
+```
+
+---
+
+### POST /api/order/razorpay/create-order
+
+Create a Razorpay Order for Standard Checkout popup payment.
+
+**Auth**: `Authorization: Bearer <user JWT>` (optional for guest orders) — `optionalUser`.
+
+**Request body**: `{ "orderId": "ObjectId (required)" }`
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": {
+    "orderId": "651234567890abcdef123456",
+    "razorpayOrderId": "order_EKwxwAgItmmXdp",
+    "amount": 99900,
+    "currency": "INR",
+    "keyId": "rzp_test_...",
+    "customer": {
+      "name": "Customer Name",
+      "contact": "9876543210",
+      "email": "user@example.com"
+    }
+  },
+  "message": "Razorpay order created successfully",
+  "success": true
+}
+```
+
+---
+
+### POST /api/order/razorpay/verify-payment
+
+Verify HMAC SHA256 payment signature after Razorpay popup completes on frontend (Web or React Native).
+
+**Auth**: `Authorization: Bearer <user JWT>` (optional for guest orders) — `optionalUser`.
+
+**Request body**:
+```json
+{
+  "orderId": "651234567890abcdef123456",
+  "razorpay_order_id": "order_EKwxwAgItmmXdp",
+  "razorpay_payment_id": "pay_29QQoUBi66xm2f",
+  "razorpay_signature": "9ef4dffbfd84f1318f6739a3ce19f9d85851857ae648f114332d8401e0949a3d"
+}
+```
+
+**Success response** `200`:
+```json
+{
+  "statusCode": 200,
+  "data": { ...order },
+  "message": "Payment verified and order confirmed successfully",
+  "success": true
+}
+```
+
+---
+
+
 ## Bundles
 
 Base path: `/api/bundles`. Source: `routes/bundle/index.js`, `controllers/bundle/index.js`, model `models/bundleModel.js`.
@@ -2175,23 +2256,30 @@ Base path: `/api/webhook`. Source: `routes/webhook/index.js`, handler implemente
 
 Razorpay payment webhook receiver — updates order payment status when Razorpay reports a payment event. Intended to be called by Razorpay's servers, not by application clients.
 
-**Auth**: None via Express middleware (deliberately, since Razorpay itself calls this). Instead, authenticity is verified via **HMAC signature**: the `x-razorpay-signature` request header must equal `HMAC-SHA256(JSON.stringify(req.body), process.env.RAZORPAY_WEBHOOK_SECRET)` in hex.
+**Auth**: None via Express middleware (deliberately, since Razorpay itself calls this). Instead, authenticity is verified via **HMAC SHA-256 signature**: the `x-razorpay-signature` request header is verified against the raw request buffer (`req.rawBody`) captured by `express.json({ verify: ... })` using `process.env.RAZORPAY_WEBHOOK_SECRET`.
 
 **Headers**
 
 | Header | Required | Description |
 |---|---|---|
-| x-razorpay-signature | Yes | HMAC-SHA256 signature of the raw JSON body, computed with `RAZORPAY_WEBHOOK_SECRET` |
+| x-razorpay-signature | Yes | HMAC-SHA256 signature of the raw JSON body buffer, computed with `RAZORPAY_WEBHOOK_SECRET` |
 
-**Request body**: Razorpay webhook event payload (JSON) — shape defined by Razorpay, notably `event` (e.g. `"payment.captured"`, `"payment.failed"`) and `payload.payment.entity` / `payload.payment_link.entity`.
+**Request body**: Razorpay webhook event payload (JSON) — shape defined by Razorpay, notably `event` (`"payment.captured"`, `"order.paid"`, `"payment_link.paid"`, `"payment.failed"`) and `payload.payment.entity`, `payload.order.entity`, and/or `payload.payment_link.entity`.
 
 **Success response** `200`: `{ "status": "success" }` (not wrapped in `ApiResponse`) — returned even if the event type is unhandled or the referenced order can't be found (those cases are only logged, not surfaced as errors, since Razorpay expects a `200` to stop retrying).
 
 **Errors**:
+- `400 {"error":"Missing signature header"}` — missing `x-razorpay-signature` header.
 - `400 {"error":"Invalid signature"}` — signature mismatch.
+- `500 {"error":"Webhook secret not configured"}` — `RAZORPAY_WEBHOOK_SECRET` missing from environment.
 - `500 {"error":"Webhook processing failed"}` — unexpected exception.
 
-**Notable behavior**: On `payment.captured`, looks up the order by `paymentLinkId`, verifies the paid amount (in paise) matches `order.finalTotalAmount`, and if so sets `paymentStatus: "paid"`, `paymentId`, `paymentMethod`, `paidAt`, and bumps `status` from `"pending"` to `"confirmed"`. On `payment.failed`, sets `paymentStatus: "failed"`. **Important caveat**: this route computes the HMAC over `JSON.stringify(req.body)`, i.e. the body *after* Express's `express.json()` middleware has already parsed and re-serialized it — if Razorpay's actual raw request bytes differ in formatting/key order from Node's re-serialization, signature verification could fail even for genuine requests; a raw-body capture is generally recommended for webhook signature verification and does not appear to be used here.
+**Notable behavior**:
+- On `payment.captured`, `order.paid`, or `payment_link.paid`, the order is located by `paymentLinkId`, `razorpayOrderId`, or `notes.orderId`.
+- Verifies the paid amount (in paise) matches `order.finalTotalAmount`.
+- Sets `paymentStatus: "paid"`, `paymentMode: "ONLINE"`, `paymentId`, `paymentMethod`, `paidAt`, and transitions `status` from `"pending"` to `"confirmed"`.
+- Automatically triggers invoice PDF bill generation (`ensureOrderBillGenerated`).
+- On `payment.failed`, sets `paymentStatus: "failed"` if the order is not already marked paid.
 
 ---
 

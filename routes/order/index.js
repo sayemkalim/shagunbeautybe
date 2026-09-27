@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const OrderController = require("../../controllers/order/index.js");
-const { user } = require("../../middleware/auth/userMiddleware.js");
+const { user, optionalUser } = require("../../middleware/auth/userMiddleware.js");
 const {
   adminOrSuperAdmin,
 } = require("../../middleware/auth/adminMiddleware.js");
@@ -27,5 +27,10 @@ router.get("/payment/:id/bill", adminOrSuperAdmin, OrderController.getOrderBill)
 router.get("/user/:id", user, OrderController.getOrderByIdFormUser);
 // router.get("/generate-order-bill/:id", user, OrderController.generateOrderBill);
 router.post("/generate-payment-link", adminOrSuperAdmin, OrderController.generatePaymentLinks);
+
+// Razorpay Standard Checkout (Popup) routes
+router.get("/razorpay/config", OrderController.getRazorpayConfig);
+router.post("/razorpay/create-order", optionalUser, OrderController.createRazorpayOrder);
+router.post("/razorpay/verify-payment", optionalUser, OrderController.verifyRazorpayPayment);
 
 module.exports = router;
