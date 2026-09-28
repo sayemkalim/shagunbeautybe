@@ -146,12 +146,25 @@ async function sendStatusUpdateEmails(data) {
         user,
         previousStatus
       );
-      // Add tracking pixel
-      const htmlWithTracking = addTrackingPixel(customerHTML, order._id, `status-${order.status}`);
+      const refundAmtStr = order.refundAmount ? `₹${Number(order.refundAmount).toFixed(2)}` : '';
+      const orderRef = order.orderNumber ? `#${order.orderNumber}` : `#${order._id}`;
+      const rStatus = (order.refundStatus || "initiated").toLowerCase();
+      
+      let customerSubject = `Order Status Update - Order ${orderRef} is now ${order.status.toUpperCase()}`;
+      if (order.status === "refunded" || (order.refundAmount && Number(order.refundAmount) > 0)) {
+        if (rStatus === "initiated" || rStatus === "pending" || rStatus === "processing") {
+          customerSubject = `⏳ Refund Initiated: ${refundAmtStr ? refundAmtStr + ' for ' : ''}Order ${orderRef}`;
+        } else if (rStatus === "failed") {
+          customerSubject = `❌ Refund Failed: Order ${orderRef}`;
+        } else {
+          customerSubject = `✅ Refund Completed: ${refundAmtStr ? refundAmtStr + ' for ' : ''}Order ${orderRef}`;
+        }
+      }
+
       emailPromises.push(
         sendEmail({
           to: user.email,
-          subject: `Order Status Update - Order #${order._id} is now ${order.status.toUpperCase()}`,
+          subject: customerSubject,
           html: htmlWithTracking,
         })
       );
@@ -173,13 +186,28 @@ async function sendStatusUpdateEmails(data) {
         previousStatus,
         updatedBy
       );
+      const refundAmtStr = order.refundAmount ? `₹${Number(order.refundAmount).toFixed(2)}` : '';
+      const orderRef = order.orderNumber ? `#${order.orderNumber}` : `#${order._id}`;
+      const rStatus = (order.refundStatus || "initiated").toLowerCase();
+
+      let adminSubject = `📝 Order Status Updated - Order ${orderRef} → ${order.status.toUpperCase()}`;
+      if (order.status === "refunded" || (order.refundAmount && Number(order.refundAmount) > 0)) {
+        if (rStatus === "initiated" || rStatus === "pending" || rStatus === "processing") {
+          adminSubject = `⏳ Refund Initiated: ${refundAmtStr ? refundAmtStr + ' for ' : ''}Order ${orderRef}`;
+        } else if (rStatus === "failed") {
+          adminSubject = `❌ Refund Failed: Order ${orderRef}`;
+        } else {
+          adminSubject = `✅ Refund Completed: ${refundAmtStr ? refundAmtStr + ' for ' : ''}Order ${orderRef}`;
+        }
+      }
+
       // Send to all admins
       adminEmails.forEach(adminEmail => {
         console.log("📨 Preparing company status email to:", adminEmail);
         emailPromises.push(
           sendEmail({
             to: adminEmail,
-            subject: `📝 Order Status Updated - Order #${order._id} → ${order.status.toUpperCase()}`,
+            subject: adminSubject,
             html: companyHTML,
           })
         );

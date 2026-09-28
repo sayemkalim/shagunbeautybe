@@ -65,6 +65,32 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
   const total = toNumber(order.finalTotalAmount);
   const baseUrl = process.env.APP_URL || 'http://localhost:5000';
 
+  const isRefunded = order.status === "refunded" || order.paymentStatus === "refunded" || (order.refundAmount && Number(order.refundAmount) > 0);
+  const refundStatus = (order.refundStatus || "initiated").toLowerCase();
+  const refundAmountFormatted = order.refundAmount ? Number(order.refundAmount).toFixed(2) : total.toFixed(2);
+
+  let refundTitle = "Order Refunded 💳";
+  let refundSubtitle = `A refund of ₹${refundAmountFormatted} has been processed for your order.`;
+  let refundBadgeColor = "#8b5cf6";
+  let refundStatusLabel = "Initiated";
+
+  if (refundStatus === "initiated" || refundStatus === "pending" || refundStatus === "processing") {
+    refundTitle = "Refund Initiated ⏳";
+    refundSubtitle = `A refund of ₹${refundAmountFormatted} has been initiated and is being processed. It will be credited soon.`;
+    refundBadgeColor = "#f59e0b";
+    refundStatusLabel = "Initiated";
+  } else if (refundStatus === "failed") {
+    refundTitle = "Refund Failed ❌";
+    refundSubtitle = `The refund of ₹${refundAmountFormatted} could not be completed.${order.refundReason ? ' Reason: ' + order.refundReason : ' Please contact our support team.'}`;
+    refundBadgeColor = "#ef4444";
+    refundStatusLabel = "Failed";
+  } else if (refundStatus === "processed" || refundStatus === "completed") {
+    refundTitle = "Refund Completed ✅";
+    refundSubtitle = `A refund of ₹${refundAmountFormatted} has been successfully processed and credited.`;
+    refundBadgeColor = "#10b981";
+    refundStatusLabel = "Processed";
+  }
+
   return `
     <!DOCTYPE html>
     <html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -74,7 +100,7 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
       <meta http-equiv="X-UA-Compatible" content="IE=edge" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <link href="https://fonts.googleapis.com/css?family=Outfit:ital,wght@0,400;0,500;0,600" rel="stylesheet" />
-      <title>Order Status Update - Shagun Beauty</title>
+      <title>${isRefunded ? refundTitle.replace(/[^\w\s]/gi, '').trim() : "Order Status Update"} - Shagun Beauty</title>
       <style>
         html, body { margin: 0 !important; padding: 0 !important; min-height: 100% !important; width: 100% !important; -webkit-font-smoothing: antialiased; }
         * { -ms-text-size-adjust: 100%; }
@@ -113,7 +139,7 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 12px 0px;">
                                     <div style="line-height: 128%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 38px; font-weight: 500; color: #ffffff; text-align: center;">
-                                      Order Status Updated ${statusInfo.emoji}
+                                      ${isRefunded ? refundTitle : `Order Status Updated ${statusInfo.emoji}`}
                                     </div>
                                   </td>
                                 </tr>
@@ -124,7 +150,7 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                 <tr>
                                   <td align="center" valign="top" style="padding: 0px 0px 12px 0px;">
                                     <div style="line-height: 156%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 19px; font-weight: normal; color: #ffffffcc; text-align: center;">
-                                      ${statusInfo.message}
+                                      ${isRefunded ? refundSubtitle : statusInfo.message}
                                     </div>
                                   </td>
                                 </tr>
@@ -134,7 +160,7 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                               <table width="100%" border="0" cellpadding="0" cellspacing="0">
                                 <tr>
                                   <td align="center" style="padding: 0px 0px 16px 0px;">
-                                    <a style="display: inline-block; border-radius: 126px; background-color: ${statusInfo.color}; padding: 12px 24px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-weight: 600; font-size: 16px; line-height: 150%; letter-spacing: -0.2px; color: #1a110c; text-align: center; text-decoration: none;" 
+                                    <a style="display: inline-block; border-radius: 126px; background-color: ${isRefunded ? refundBadgeColor : statusInfo.color}; padding: 12px 24px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-weight: 600; font-size: 16px; line-height: 150%; letter-spacing: -0.2px; color: #1a110c; text-align: center; text-decoration: none;" 
                                        href="${baseUrl}/orders/${order._id}">
                                       View Order Details
                                     </a>
@@ -156,8 +182,8 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                       </tr>
                                       <tr>
                                         <td valign="top" style="padding: 0px 0px 8px 0px;">
-                                          <div style="line-height: 140%; letter-spacing: -0px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 500; color: ${statusInfo.color};">
-                                            ${order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                                          <div style="line-height: 140%; letter-spacing: -0px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 500; color: ${isRefunded ? refundBadgeColor : statusInfo.color};">
+                                            ${isRefunded ? `Refund ${refundStatusLabel}` : (order.status.charAt(0).toUpperCase() + order.status.slice(1))}
                                           </div>
                                         </td>
                                       </tr>
@@ -189,7 +215,7 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                       <tr>
                                         <td valign="top" style="padding: 0px 0px 8px 0px;">
                                           <div style="line-height: 140%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 600; color: #ffffff;">
-                                            ${order.address.name}
+                                            ${order.address?.name || 'Customer'}
                                           </div>
                                         </td>
                                       </tr>
@@ -205,7 +231,7 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                 </tr>
                               </table>
                               
-                              ${(order.status === "refunded" || order.refundAmount > 0) ? `
+                              ${isRefunded ? `
                               <!-- Refund Details Box -->
                               <table width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #ffffff0d; border-radius: 8px; margin-top: 16px;">
                                 <tr>
@@ -221,6 +247,14 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                       <tr>
                                         <td valign="top">
                                           <table width="100%" border="0" cellpadding="4" cellspacing="0" style="font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 14px; color: #ffffffcc;">
+                                            <tr>
+                                              <td width="40%" style="color: #ffffffcc;">Refund Status:</td>
+                                              <td>
+                                                <span style="display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 600; background-color: ${refundBadgeColor}20; color: ${refundBadgeColor}; border: 1px solid ${refundBadgeColor}50; text-transform: uppercase;">
+                                                  ${refundStatusLabel}
+                                                </span>
+                                              </td>
+                                            </tr>
                                             <tr>
                                               <td width="40%" style="color: #ffffffcc;">Refund Amount:</td>
                                               <td style="font-weight: 600; color: #ffffff;">₹${order.refundAmount ? Number(order.refundAmount).toFixed(2) : total.toFixed(2)}</td>

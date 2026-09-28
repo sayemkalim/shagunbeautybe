@@ -4011,7 +4011,7 @@ const refundOrder = asyncHandler(async (req, res) => {
     refundTransactionId || transactionId || utrNo || utr_number || null;
   const targetRefundTo = refundTo || destination || to || null;
   const targetReason = refundReason || reason || notes || null;
-  const targetStatus = refundStatus || "processed";
+  const targetStatus = refundStatus || "initiated";
 
   const previousStatus = order.status;
   let rzpRefund = null;
@@ -4061,7 +4061,11 @@ const refundOrder = asyncHandler(async (req, res) => {
     order.refundAmount = calculatedAmount;
     order.refundReason = targetReason;
     order.refundStatus = targetStatus;
-    order.refundedAt = new Date();
+    if (targetStatus === "processed" || targetStatus === "completed") {
+      order.refundedAt = new Date();
+    } else {
+      order.refundInitiatedAt = new Date();
+    }
     order.paymentStatus =
       calculatedAmount >= orderTotal ? "refunded" : "partially_refunded";
     order.status = "refunded";
@@ -4106,7 +4110,7 @@ const refundOrder = asyncHandler(async (req, res) => {
           order,
           refund: rzpRefund,
         },
-        "Order refunded successfully",
+        `Order refund ${targetStatus} successfully`,
         true,
       ),
     );
@@ -4123,6 +4127,127 @@ const refundOrder = asyncHandler(async (req, res) => {
         ),
       );
   }
+});
+
+const updateRefundStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const {
+    refundStatus,
+    refundTransactionId,
+    transactionId,
+    utrNo,
+    utr_number,
+    refundReason,
+    reason,
+    notes,
+    refundTo,
+    destination,
+    amount,
+    refundAmount,
+  } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID format", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  const validStatuses = ["initiated", "pending", "processing", "processed", "completed", "failed"];
+  const normalizedStatus = refundStatus ? refundStatus.toString().toLowerCase().trim() : null;
+
+  if (!normalizedStatus || !validStatuses.includes(normalizedStatus)) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          `Invalid refund status. Must be one of: ${validStatuses.join(", ")}`,
+          false,
+        ),
+      );
+  }
+
+  const previousStatus = order.status;
+  order.refundStatus = normalizedStatus === "completed" ? "processed" : normalizedStatus;
+
+  if (normalizedStatus === "processed" || normalizedStatus === "completed") {
+    order.refundedAt = order.refundedAt || new Date();
+    order.status = "refunded";
+    order.paymentStatus = "refunded";
+  } else if (normalizedStatus === "failed") {
+    if (order.paymentStatus === "refund_initiated") {
+      order.paymentStatus = "paid";
+    }
+  } else if (normalizedStatus === "initiated" || normalizedStatus === "pending") {
+    order.refundInitiatedAt = order.refundInitiatedAt || new Date();
+    order.status = "refunded";
+    order.paymentStatus = "refunded";
+  }
+
+  const targetTxn = refundTransactionId || transactionId || utrNo || utr_number;
+  if (targetTxn) {
+    order.refundTransactionId = targetTxn;
+  }
+  const targetDest = refundTo || destination;
+  if (targetDest) {
+    order.refundTo = targetDest;
+  }
+  const targetRsn = refundReason || reason || notes;
+  if (targetRsn) {
+    order.refundReason = targetRsn;
+  }
+  if (refundAmount !== undefined || amount !== undefined) {
+    order.refundAmount = parseFloat(refundAmount !== undefined ? refundAmount : amount);
+  } else if (!order.refundAmount) {
+    order.refundAmount = parseFloat(order.finalTotalAmount.toString());
+  }
+
+  await order.save();
+
+  // Send refund update email
+  const user = await User.findById(order.user);
+  if (user && user.email) {
+    setImmediate(async () => {
+      try {
+        await sendStatusUpdateEmails({
+          order: order.toObject(),
+          user: user.toObject(),
+          previousStatus,
+          updatedBy: req.admin ? req.admin.toObject() : null,
+        });
+      } catch (emailErr) {
+        console.error("❌ Failed to send refund update email:", emailErr.message);
+      }
+    });
+  }
+
+  if (normalizedStatus === "processed" || normalizedStatus === "initiated") {
+    if (!["cancelled", "refunded"].includes(previousStatus)) {
+      InventoryService.restoreForCancelledOrder(order).catch((err) =>
+        console.error(`Inventory restore failed for refunded order ${order._id}:`, err.message)
+      );
+      CouponService.releaseCouponUsage(order._id).catch((err) =>
+        console.error(`Coupon release failed for refunded order ${order._id}:`, err.message)
+      );
+    }
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      order,
+      `Refund status updated to ${normalizedStatus} successfully`,
+      true,
+    ),
+  );
 });
 
 module.exports = {
@@ -4148,4 +4273,5 @@ module.exports = {
   verifyRazorpayPayment,
   getRazorpayConfig,
   refundOrder,
+  updateRefundStatus,
 };

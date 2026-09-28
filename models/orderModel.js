@@ -266,7 +266,7 @@ const OrderSchema = new mongoose.Schema({
   },
   refundStatus: {
     type: String,
-    enum: [null, "pending", "processed", "failed"],
+    enum: [null, "pending", "initiated", "processing", "processed", "completed", "failed"],
     default: null
   },
   refundMode: {
@@ -283,6 +283,10 @@ const OrderSchema = new mongoose.Schema({
   },
   refundReason: {
     type: String,
+    default: null
+  },
+  refundInitiatedAt: {
+    type: Date,
     default: null
   },
   refundedAt: {
