@@ -1981,25 +1981,39 @@ Option 2 (Existing Order Retry):
 
 ### POST /api/order/:id/refund
 
-Process an online refund for a paid order via Razorpay and update order/payment status to `"refunded"`.
+Process an online refund (via Razorpay) or record a manual refund (via owner UPI / Bank Transfer / Cash) for an order, and update order/payment status to `"refunded"`.
 
 **Auth**: `Authorization: Bearer <admin/super_admin JWT>`.
 
-**Request body** (optional):
+**Request body**:
 ```json
 {
   "amount": 999.00,
+  "refundMode": "razorpay | manual_upi | upi | bank_transfer | cash | other",
+  "refundTransactionId": "UTR / Transaction ID / Reference (optional for Razorpay, recommended for manual UPI)",
+  "refundTo": "customer@upi / 9876543210 / Account No / Destination",
   "reason": "Customer cancellation / return request"
 }
 ```
-*(If `amount` is omitted, the full `order.finalTotalAmount` is refunded).*
+*(If `amount` is omitted, the full `order.finalTotalAmount` is refunded. If `refundMode` is `"razorpay"`, it calls Razorpay API automatically. For manual UPI/Bank transfer, it records the manual transfer details without calling Razorpay).*
 
 **Success response** `200`:
 ```json
 {
   "statusCode": 200,
   "data": {
-    "order": { ...order, "status": "refunded", "paymentStatus": "refunded" },
+    "order": {
+      "...": "...",
+      "status": "refunded",
+      "paymentStatus": "refunded",
+      "refundAmount": 999.00,
+      "refundMode": "manual_upi",
+      "refundTransactionId": "UTR1234567890",
+      "refundTo": "customer@upi",
+      "refundReason": "Customer cancellation / return request",
+      "refundStatus": "processed",
+      "refundedAt": "2026-09-28T13:30:00.000Z"
+    },
     "refund": {
       "id": "rfnd_...",
       "amount": 99900,

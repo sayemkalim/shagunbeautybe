@@ -209,7 +209,57 @@ const getSingleAdmin = asyncHandler(async (req, res) => {
   res.json(new ApiResponse(200, admin, "Admin fetched successfully", true));
 });
 
+
+const crypto = require("crypto");
+const { sendForgotPasswordEmail } = require("../../../utils/email/directEmailService");
+
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Email is required", false));
+  }
+
+  const admin = await Admin.findOne({ email: email.toLowerCase().trim() });
+  if (!admin) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Admin account with this email was not found", false));
+  }
+
+  // Generate a temporary 6-digit random password
+  const tempPassword = crypto.randomInt(100000, 1000000).toString();
+
+  admin.password = tempPassword;
+  await admin.save();
+
+  // Send email asynchronously
+  setImmediate(async () => {
+    try {
+      await sendForgotPasswordEmail({
+        user: { name: admin.name || "Admin", email: admin.email },
+        newPassword: tempPassword,
+      });
+      console.log("✅ Admin password reset email sent to:", admin.email);
+    } catch (err) {
+      console.error("❌ Failed to send admin password reset email:", err.message);
+    }
+  });
+
+  res.json(
+    new ApiResponse(
+      200,
+      null,
+      "Temporary password has been sent to your email. Please check your inbox.",
+      true
+    )
+  );
+});
+
 module.exports = {
+  forgotPassword,
   getAllAdmins,
   registerAdmin,
   loginAdmin,

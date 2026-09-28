@@ -205,6 +205,55 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
                                 </tr>
                               </table>
                               
+                              ${(order.status === "refunded" || order.refundAmount > 0) ? `
+                              <!-- Refund Details Box -->
+                              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #ffffff0d; border-radius: 8px; margin-top: 16px;">
+                                <tr>
+                                  <td style="padding: 20px;">
+                                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                                      <tr>
+                                        <td valign="top" style="padding: 0px 0px 10px 0px;">
+                                          <div style="line-height: 140%; letter-spacing: -0.2px; font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 20px; font-weight: 500; color: #ffcb65;">
+                                            Refund Details 💳
+                                          </div>
+                                        </td>
+                                      </tr>
+                                      <tr>
+                                        <td valign="top">
+                                          <table width="100%" border="0" cellpadding="4" cellspacing="0" style="font-family: 'Outfit', Arial, Helvetica, sans-serif; font-size: 14px; color: #ffffffcc;">
+                                            <tr>
+                                              <td width="40%" style="color: #ffffffcc;">Refund Amount:</td>
+                                              <td style="font-weight: 600; color: #ffffff;">₹${order.refundAmount ? Number(order.refundAmount).toFixed(2) : total.toFixed(2)}</td>
+                                            </tr>
+                                            ${order.refundMode ? `
+                                            <tr>
+                                              <td style="color: #ffffffcc;">Refund Mode:</td>
+                                              <td style="color: #ffffff; text-transform: capitalize;">${order.refundMode.replace(/_/g, ' ')}</td>
+                                            </tr>` : ''}
+                                            ${order.refundTransactionId ? `
+                                            <tr>
+                                              <td style="color: #ffffffcc;">UTR / Transaction ID:</td>
+                                              <td style="color: #ffffff; font-family: monospace;">${order.refundTransactionId}</td>
+                                            </tr>` : ''}
+                                            ${order.refundTo ? `
+                                            <tr>
+                                              <td style="color: #ffffffcc;">Refunded To:</td>
+                                              <td style="color: #ffffff;">${order.refundTo}</td>
+                                            </tr>` : ''}
+                                            ${order.refundReason ? `
+                                            <tr>
+                                              <td style="color: #ffffffcc;">Reason / Note:</td>
+                                              <td style="color: #ffffff;">${order.refundReason}</td>
+                                            </tr>` : ''}
+                                          </table>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                              </table>
+                              ` : ''}
+                              
                             </td>
                           </tr>
                         </table>

@@ -228,7 +228,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const updateUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { name, email, phone } = req.body;
+  const { name, email, phone, pin } = req.body;
 
   const user = await User.findById(id);
   if (!user) {
@@ -237,9 +237,23 @@ const updateUser = asyncHandler(async (req, res) => {
       .json(new ApiResponse(404, null, "User not found", false));
   }
 
+
   if (name) user.name = name;
   if (email) user.email = email;
   if (phone) user.phone = phone;
+  if (pin) {
+    if (!PIN_REGEX.test(pin)) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "PIN must be exactly 4 digits", false));
+    }
+    user.pin = pin;
+    user.pinAttempts = 0;
+    user.pinAttemptsWindowStart = null;
+    user.resetPinOtp = null;
+    user.resetPinOtpExpires = null;
+    user.resetPinAttempts = 0;
+  }
 
   await user.save();
   const updatedUser = await User.findById(id).select("-pin");

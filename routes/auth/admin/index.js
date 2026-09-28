@@ -5,6 +5,7 @@ const {
   updateAdmin,
   deleteAdmin,
   loginAdmin,
+  forgotPassword,
   getAllSubAdmins,
   registerSubAdmin,
   getSingleAdmin,
@@ -19,6 +20,7 @@ const router = express.Router();
 router.get("/", superAdmin, getAllAdmins);
 router.post("/register", registerAdmin);
 router.post("/login", loginAdmin);
+router.post("/forgot-password", forgotPassword);
 router.get("/sub-admin", admin, getAllSubAdmins);
 router.post("/sub-admin", admin, registerSubAdmin);
 router.get("/:id", superAdmin, getSingleAdmin);

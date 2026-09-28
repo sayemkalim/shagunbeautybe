@@ -269,6 +269,22 @@ const OrderSchema = new mongoose.Schema({
     enum: [null, "pending", "processed", "failed"],
     default: null
   },
+  refundMode: {
+    type: String,
+    default: null
+  },
+  refundTransactionId: {
+    type: String,
+    default: null
+  },
+  refundTo: {
+    type: String,
+    default: null
+  },
+  refundReason: {
+    type: String,
+    default: null
+  },
   refundedAt: {
     type: Date,
     default: null
