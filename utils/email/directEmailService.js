@@ -281,7 +281,7 @@ async function sendForgotPasswordEmail(data) {
   
   console.log("\n🎯 Processing Forgot PIN / Password Email (Direct)");
   console.log("👤 User:", user.name, `(${user.email})`);
-  console.log(`🔑 Verification code/OTP: ${code}`);
+  console.log("🔑 Verification code/password provided");
 
   try {
     if (user.email) {

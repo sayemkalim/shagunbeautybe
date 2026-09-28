@@ -1179,41 +1179,23 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   }
 
   // Send status update emails directly (async - won't block response)
-  const user = await User.findById(order.user);
-
-  // Add status update email tracking entry as queued
-  if (!order.emailTracking) {
-    order.emailTracking = { confirmation: {}, statusUpdates: [] };
-  }
-  order.emailTracking.statusUpdates.push({
-    status: order.status,
-    emailStatus: "queued",
-    queuedAt: new Date(),
-    attempts: 0,
-  });
-  await order.save();
-
-  // Send emails asynchronously (non-blocking)
-
-  console.log(user, "user");
-  setImmediate(async () => {
-    try {
-      const htmlContent = generateCustomerOrderConfirmation(order, user);
-      const emailOptions = {
-        to: user.email,
-        subject: `Order Received - ${order._id}`,
-        html: htmlContent,
-      };
-
-      const emailSent = await sendEmail(emailOptions);
-
-      if (emailSent.accepted.length > 0) {
-        console.log("✅ Status update email sent successfully:", emailSent);
-      }
-    } catch (error) {
-      console.error("❌ Failed to send status update emails:", error.message);
+  if (previousStatus !== normalizedStatus) {
+    const user = await User.findById(order.user);
+    if (user && user.email) {
+      setImmediate(async () => {
+        try {
+          await sendStatusUpdateEmails({
+            order: order.toObject(),
+            user: user.toObject(),
+            previousStatus,
+            updatedBy: req.admin ? req.admin.toObject() : null,
+          });
+        } catch (error) {
+          console.error("❌ Failed to send status update emails:", error.message);
+        }
+      });
     }
-  });
+  }
 
   return res
     .status(200)

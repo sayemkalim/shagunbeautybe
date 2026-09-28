@@ -431,10 +431,6 @@ const forgotPin = asyncHandler(async (req, res) => {
   // Generate 6-digit secure OTP
   const otp = crypto.randomInt(100000, 1000000).toString();
 
-  console.log("\n==================================================");
-  console.log(`🔐 [FORGOT PIN] Generated OTP for ${user.email} (${user.phone}): ${otp}`);
-  console.log("==================================================\n");
-
   user.resetPinOtp = otp;
   user.resetPinOtpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
   user.resetPinAttempts = 0;
