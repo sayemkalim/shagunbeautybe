@@ -90,8 +90,23 @@ const generateCustomerStatusUpdate = (order, user, previousStatus) => {
   const total = toNumber(order.finalTotalAmount);
   const baseUrl = process.env.APP_URL || 'http://localhost:5000';
 
-  const isRefunded = order.status === "refunded" || order.paymentStatus === "refunded" || (order.refundAmount && Number(order.refundAmount) > 0);
-  const refundStatus = (order.refundStatus || "initiated").toLowerCase();
+  let refundStatus = (order.refundStatus || "").toLowerCase().trim();
+  if (!refundStatus) {
+    if (order.status === "refund_failed" || order.paymentStatus === "refund_failed") {
+      refundStatus = "failed";
+    } else if (order.status === "refund_initiated" || order.paymentStatus === "refund_initiated") {
+      refundStatus = "initiated";
+    } else if (order.status === "refunded" || order.paymentStatus === "refunded") {
+      refundStatus = "processed";
+    }
+  }
+
+  const isRefunded =
+    ["refund_initiated", "refunded", "refund_failed"].includes(order.status) ||
+    ["refund_initiated", "refunded", "refund_failed"].includes(order.paymentStatus) ||
+    Boolean(order.refundStatus) ||
+    Boolean(refundStatus);
+
   const refundAmountFormatted = order.refundAmount ? Number(order.refundAmount).toFixed(2) : total.toFixed(2);
 
   let refundTitle = "Order Refunded 💳";

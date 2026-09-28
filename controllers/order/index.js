@@ -1261,13 +1261,14 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 
   // Send status update emails directly (async - won't block response)
   if (previousStatus !== normalizedStatus) {
-    const user = await User.findById(order.user);
-    if (user && user.email) {
+    const user = order.user ? await User.findById(order.user) : null;
+    const targetUser = user || (order.guestInfo?.email ? { name: order.guestInfo.name || "Customer", email: order.guestInfo.email } : (order.address?.email ? { name: order.address.name || "Customer", email: order.address.email } : null));
+    if (targetUser && targetUser.email) {
       setImmediate(async () => {
         try {
           await sendStatusUpdateEmails({
             order: order.toObject(),
-            user: user.toObject(),
+            user: typeof targetUser.toObject === "function" ? targetUser.toObject() : targetUser,
             previousStatus,
             updatedBy: req.admin ? req.admin.toObject() : null,
           });
@@ -1447,11 +1448,12 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
       // Send status update email asynchronously (non-blocking)
       setImmediate(async () => {
         try {
-          const user = await User.findById(order.user);
-          if (user) {
+          const user = order.user ? await User.findById(order.user) : null;
+          const targetUser = user || (order.guestInfo?.email ? { name: order.guestInfo.name || "Customer", email: order.guestInfo.email } : (order.address?.email ? { name: order.address.name || "Customer", email: order.address.email } : null));
+          if (targetUser && targetUser.email) {
             await sendStatusUpdateEmails({
               order: order.toObject(),
-              user: user.toObject(),
+              user: typeof targetUser.toObject === "function" ? targetUser.toObject() : targetUser,
               previousStatus,
               updatedBy: req.admin ? req.admin.toObject() : null,
             });
@@ -4266,13 +4268,14 @@ const refundOrder = asyncHandler(async (req, res) => {
     await order.save();
 
     // Send refund status update email
-    const user = await User.findById(order.user);
-    if (user && user.email) {
+    const user = order.user ? await User.findById(order.user) : null;
+    const targetUser = user || (order.guestInfo?.email ? { name: order.guestInfo.name || "Customer", email: order.guestInfo.email } : (order.address?.email ? { name: order.address.name || "Customer", email: order.address.email } : null));
+    if (targetUser && targetUser.email) {
       setImmediate(async () => {
         try {
           await sendStatusUpdateEmails({
             order: order.toObject(),
-            user: user.toObject(),
+            user: typeof targetUser.toObject === "function" ? targetUser.toObject() : targetUser,
             previousStatus,
             updatedBy: req.admin ? req.admin.toObject() : null,
           });
@@ -4406,13 +4409,14 @@ const updateRefundStatus = asyncHandler(async (req, res) => {
   await order.save();
 
   // Send refund update email
-  const user = await User.findById(order.user);
-  if (user && user.email) {
+  const user = order.user ? await User.findById(order.user) : null;
+  const targetUser = user || (order.guestInfo?.email ? { name: order.guestInfo.name || "Customer", email: order.guestInfo.email } : (order.address?.email ? { name: order.address.name || "Customer", email: order.address.email } : null));
+  if (targetUser && targetUser.email) {
     setImmediate(async () => {
       try {
         await sendStatusUpdateEmails({
           order: order.toObject(),
-          user: user.toObject(),
+          user: typeof targetUser.toObject === "function" ? targetUser.toObject() : targetUser,
           previousStatus,
           updatedBy: req.admin ? req.admin.toObject() : null,
         });
