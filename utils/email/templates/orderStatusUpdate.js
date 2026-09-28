@@ -35,10 +35,20 @@ const getStatusInfo = (status) => {
       message: "Your order has been cancelled.",
       emoji: "❌"
     },
+    refund_initiated: {
+      color: "#f59e0b",
+      message: "Your order refund has been initiated and is being processed. It will be credited soon.",
+      emoji: "⏳"
+    },
     refunded: {
-      color: "#8b5cf6",
-      message: "Your order has been refunded. The refund amount has been processed and will be credited to your original payment method.",
-      emoji: "💳"
+      color: "#10b981",
+      message: "Your order refund has been processed successfully.",
+      emoji: "✅"
+    },
+    refund_failed: {
+      color: "#ef4444",
+      message: "Your order refund could not be completed. Please contact our support team.",
+      emoji: "❌"
     },
   };
 

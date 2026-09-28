@@ -1083,7 +1083,9 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     "out_for_delivery",
     "delivered",
     "cancelled",
+    "refund_initiated",
     "refunded",
+    "refund_failed",
   ];
   if (!validStatuses.includes(normalizedStatus)) {
     return res
@@ -1136,7 +1138,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 
   if (
     paymentStatus &&
-    ["pending", "paid", "failed", "cancelled", "refunded"].includes(paymentStatus)
+    ["pending", "paid", "failed", "cancelled", "refund_initiated", "refunded", "refund_failed"].includes(paymentStatus)
   ) {
     order.paymentStatus = paymentStatus;
     if (paymentStatus === "paid" && !order.paidAt) {
@@ -1144,9 +1146,41 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     }
   }
 
-  if (normalizedStatus === "refunded") {
+  if (normalizedStatus === "refund_initiated") {
+    order.paymentStatus = "refund_initiated";
+    order.refundStatus = "initiated";
+    order.refundInitiatedAt = order.refundInitiatedAt || new Date();
+    if (req.body.refundAmount !== undefined || req.body.amount !== undefined) {
+      order.refundAmount = parseFloat(
+        req.body.refundAmount !== undefined ? req.body.refundAmount : req.body.amount
+      );
+    } else if (!order.refundAmount) {
+      order.refundAmount = parseFloat(order.finalTotalAmount.toString());
+    }
+    if (req.body.refundMode !== undefined || req.body.refundMethod !== undefined || req.body.mode !== undefined) {
+      order.refundMode = req.body.refundMode || req.body.refundMethod || req.body.mode;
+    }
+    if (
+      req.body.refundTransactionId !== undefined ||
+      req.body.transactionId !== undefined ||
+      req.body.utrNo !== undefined ||
+      req.body.utr_number !== undefined
+    ) {
+      order.refundTransactionId =
+        req.body.refundTransactionId ||
+        req.body.transactionId ||
+        req.body.utrNo ||
+        req.body.utr_number;
+    }
+    if (req.body.refundTo !== undefined || req.body.destination !== undefined || req.body.to !== undefined) {
+      order.refundTo = req.body.refundTo || req.body.destination || req.body.to;
+    }
+    if (req.body.refundReason !== undefined || req.body.reason !== undefined || req.body.notes !== undefined) {
+      order.refundReason = req.body.refundReason || req.body.reason || req.body.notes;
+    }
+  } else if (normalizedStatus === "refunded") {
     order.paymentStatus = "refunded";
-    order.refundStatus = req.body.refundStatus || "processed";
+    order.refundStatus = "processed";
     order.refundedAt = order.refundedAt || new Date();
     if (req.body.refundAmount !== undefined || req.body.amount !== undefined) {
       order.refundAmount = parseFloat(
@@ -1173,6 +1207,12 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     if (req.body.refundTo !== undefined || req.body.destination !== undefined || req.body.to !== undefined) {
       order.refundTo = req.body.refundTo || req.body.destination || req.body.to;
     }
+    if (req.body.refundReason !== undefined || req.body.reason !== undefined || req.body.notes !== undefined) {
+      order.refundReason = req.body.refundReason || req.body.reason || req.body.notes;
+    }
+  } else if (normalizedStatus === "refund_failed") {
+    order.paymentStatus = "refund_failed";
+    order.refundStatus = "failed";
     if (req.body.refundReason !== undefined || req.body.reason !== undefined || req.body.notes !== undefined) {
       order.refundReason = req.body.refundReason || req.body.reason || req.body.notes;
     }
@@ -1266,7 +1306,9 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
     "out_for_delivery",
     "delivered",
     "cancelled",
+    "refund_initiated",
     "refunded",
+    "refund_failed",
   ];
   if (!validStatuses.includes(normalizedStatus)) {
     return res
@@ -1321,13 +1363,23 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
         order.deliveredAt = new Date();
       }
 
-      if (normalizedStatus === "refunded") {
+      if (normalizedStatus === "refund_initiated") {
+        order.paymentStatus = "refund_initiated";
+        order.refundStatus = "initiated";
+        order.refundInitiatedAt = new Date();
+        if (!order.refundAmount) {
+          order.refundAmount = order.finalTotalAmount;
+        }
+      } else if (normalizedStatus === "refunded") {
         order.paymentStatus = "refunded";
         order.refundStatus = "processed";
         order.refundedAt = new Date();
         if (!order.refundAmount) {
           order.refundAmount = order.finalTotalAmount;
         }
+      } else if (normalizedStatus === "refund_failed") {
+        order.paymentStatus = "refund_failed";
+        order.refundStatus = "failed";
       }
 
       // Add status update email tracking entry
@@ -4018,14 +4070,20 @@ const refundOrder = asyncHandler(async (req, res) => {
 
   try {
     if (selectedMode === "razorpay") {
-      if (!order.paymentId) {
+      const rzpPaymentId =
+        req.body.paymentId ||
+        req.body.razorpayPaymentId ||
+        targetTxnId ||
+        order.paymentId;
+
+      if (!rzpPaymentId) {
         return res
           .status(400)
           .json(
             new ApiResponse(
               400,
               null,
-              "No Razorpay payment ID found for this order to process automatic Razorpay refund. If you refunded via owner UPI or Bank transfer, please select Manual UPI / Bank Transfer mode.",
+              "Razorpay Transaction / Payment ID (pay_...) is required to process refund via Razorpay. Please enter the Razorpay Transaction ID or select Owner UPI / Bank Transfer mode.",
               false,
             ),
           );
@@ -4042,33 +4100,45 @@ const refundOrder = asyncHandler(async (req, res) => {
       };
 
       rzpRefund = await razorpay.payments.refund(
-        order.paymentId,
+        rzpPaymentId,
         refundOptions,
       );
 
+      order.paymentId = rzpPaymentId;
       order.refundId = rzpRefund.id;
-      order.refundTransactionId = targetTxnId || rzpRefund.id;
+      order.refundTransactionId = rzpRefund.id || rzpPaymentId;
       order.refundMode = "razorpay";
       order.refundTo = targetRefundTo || "Original Payment Method (Razorpay)";
+      order.refundStatus = targetStatus === "initiated" ? "processed" : targetStatus;
+      order.refundedAt = new Date();
     } else {
-      // Manual UPI / Owner UPI / Bank Transfer / Cash / Other
+      // Manual UPI / Owner UPI / Bank Transfer
       order.refundId = targetTxnId || `REF-${Date.now()}`;
       order.refundTransactionId = targetTxnId;
       order.refundMode = selectedMode;
       order.refundTo = targetRefundTo;
+      order.refundStatus = targetStatus;
+      if (targetStatus === "processed" || targetStatus === "completed") {
+        order.refundedAt = new Date();
+      } else {
+        order.refundInitiatedAt = new Date();
+      }
     }
 
     order.refundAmount = calculatedAmount;
     order.refundReason = targetReason;
-    order.refundStatus = targetStatus;
     if (targetStatus === "processed" || targetStatus === "completed") {
-      order.refundedAt = new Date();
+      order.paymentStatus =
+        calculatedAmount >= orderTotal ? "refunded" : "partially_refunded";
+      order.status = "refunded";
+    } else if (targetStatus === "failed") {
+      order.paymentStatus = "refund_failed";
+      order.status = "refund_failed";
     } else {
-      order.refundInitiatedAt = new Date();
+      // initiated / pending
+      order.paymentStatus = "refund_initiated";
+      order.status = "refund_initiated";
     }
-    order.paymentStatus =
-      calculatedAmount >= orderTotal ? "refunded" : "partially_refunded";
-    order.status = "refunded";
     await order.save();
 
     // Send refund status update email
@@ -4183,13 +4253,12 @@ const updateRefundStatus = asyncHandler(async (req, res) => {
     order.status = "refunded";
     order.paymentStatus = "refunded";
   } else if (normalizedStatus === "failed") {
-    if (order.paymentStatus === "refund_initiated") {
-      order.paymentStatus = "paid";
-    }
+    order.status = "refund_failed";
+    order.paymentStatus = "refund_failed";
   } else if (normalizedStatus === "initiated" || normalizedStatus === "pending") {
     order.refundInitiatedAt = order.refundInitiatedAt || new Date();
-    order.status = "refunded";
-    order.paymentStatus = "refunded";
+    order.status = "refund_initiated";
+    order.paymentStatus = "refund_initiated";
   }
 
   const targetTxn = refundTransactionId || transactionId || utrNo || utr_number;

@@ -198,7 +198,18 @@ const OrderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["pending", "confirmed", "processing", "shipped", "out_for_delivery", "delivered", "cancelled", "refunded"],
+    enum: [
+      "pending",
+      "confirmed",
+      "processing",
+      "shipped",
+      "out_for_delivery",
+      "delivered",
+      "cancelled",
+      "refund_initiated",
+      "refunded",
+      "refund_failed"
+    ],
     default: "pending"
   },
   // Payment mode the customer chose at checkout — COD or prepaid via UPI or ONLINE.
@@ -230,7 +241,16 @@ const OrderSchema = new mongoose.Schema({
   },
   paymentStatus: {
     type: String,
-    enum: ["pending", "paid", "failed", "cancelled", "refunded", "partially_refunded"],
+    enum: [
+      "pending",
+      "paid",
+      "failed",
+      "cancelled",
+      "refund_initiated",
+      "refunded",
+      "partially_refunded",
+      "refund_failed"
+    ],
     default: "pending"
   },
   paymentId: {
