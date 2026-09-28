@@ -206,6 +206,8 @@ const OrderSchema = new mongoose.Schema({
       "out_for_delivery",
       "delivered",
       "cancelled",
+      "return_requested",
+      "returned",
       "refund_initiated",
       "refunded",
       "refund_failed"
@@ -273,6 +275,23 @@ const OrderSchema = new mongoose.Schema({
     default: null
   },
   deliveredAt: {
+    type: Date,
+    default: null
+  },
+  returnStatus: {
+    type: String,
+    enum: [null, "requested", "approved", "rejected", "received", "completed"],
+    default: null
+  },
+  returnReason: {
+    type: String,
+    default: null
+  },
+  returnRequestedAt: {
+    type: Date,
+    default: null
+  },
+  returnedAt: {
     type: Date,
     default: null
   },

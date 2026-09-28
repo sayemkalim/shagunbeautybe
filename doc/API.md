@@ -1818,6 +1818,60 @@ Let a user edit their **own pending order** (address and/or line items) before i
 
 ---
 
+### PATCH /api/order/payment/:id/cancel
+### PATCH /api/order/:id/cancel
+
+Cancel an order. Cancellation is allowed **ONLY** before the order is "out for delivery" (allowed statuses: `pending`, `confirmed`, `processing`, `shipped`). Cannot be cancelled once `out_for_delivery` or `delivered`.
+
+**Auth**: `Authorization: Bearer <user JWT>` — `user`. Enforces ownership (`user: req.user._id`).
+
+**Path params**: `id` (ObjectId, required).
+
+**Success response** `200`: `{ "data": <updated order doc>, "message": "Order cancelled successfully", "success": true }`
+
+**Errors**:
+- `400 {"message":"Invalid order ID"}`
+- `404 {"message":"Order not found"}`
+- `400 {"message":"Order is already cancelled"}`
+- `400 {"message":"Order cannot be cancelled once it is out for delivery"}`
+- `400 {"message":"Order cannot be cancelled once it is delivered"}`
+- `400 {"message":"Order cannot be cancelled once it is <status>"}`
+
+**Notable**: Releases coupon usages, restores inventory asynchronously, and sends cancellation email notification to customer.
+
+---
+
+### POST /api/order/:id/return
+### PATCH /api/order/:id/return
+### PATCH /api/order/payment/:id/return
+
+Request a return for an order. Return is allowed **ONLY** after the order status is `"delivered"`.
+
+**Auth**: `Authorization: Bearer <user JWT>` — `user`. Enforces ownership (`user: req.user._id`).
+
+**Path params**: `id` (ObjectId, required).
+
+**Request body** (optional):
+```json
+{
+  "reason": "Damaged product received / wrong item"
+}
+```
+
+**Success response** `200`: `{ "data": <updated order doc>, "message": "Order return requested successfully", "success": true }`
+
+**Errors**:
+- `400 {"message":"Invalid order ID"}`
+- `404 {"message":"Order not found"}`
+- `400 {"message":"A return request has already been submitted for this order"}`
+- `400 {"message":"Order has already been returned"}`
+- `400 {"message":"Order can only be returned after it has been delivered. Current status: <status>"}`
+- `400 {"message":"Cancelled orders cannot be returned"}`
+
+**Notable**: Sets `order.status = "return_requested"`, `order.returnStatus = "requested"`, `order.returnRequestedAt`, and sends return request status email.
+
+---
+
 ### GET /api/order/:id
 
 Fetch a single order by id (admin view — no ownership restriction, any admin can view any order).

@@ -1083,6 +1083,8 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     "out_for_delivery",
     "delivered",
     "cancelled",
+    "return_requested",
+    "returned",
     "refund_initiated",
     "refunded",
     "refund_failed",
@@ -1116,6 +1118,20 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 
   if (normalizedStatus === "delivered" && !order.deliveredAt) {
     order.deliveredAt = new Date();
+  }
+
+  if (normalizedStatus === "return_requested") {
+    order.returnStatus = order.returnStatus || "requested";
+    order.returnRequestedAt = order.returnRequestedAt || new Date();
+    if (req.body.returnReason || req.body.reason || req.body.notes) {
+      order.returnReason = req.body.returnReason || req.body.reason || req.body.notes;
+    }
+  } else if (normalizedStatus === "returned") {
+    order.returnStatus = "completed";
+    order.returnedAt = order.returnedAt || new Date();
+    if (req.body.returnReason || req.body.reason || req.body.notes) {
+      order.returnReason = req.body.returnReason || req.body.reason || req.body.notes;
+    }
   }
 
   // Handle COD payment collection at doorstep: Paid by Cash or UPI
@@ -1219,10 +1235,10 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   }
   await order.save();
 
-  // Restore inventory asynchronously if the order was cancelled or refunded
+  // Restore inventory asynchronously if the order was cancelled, refunded, or returned
   if (
-    !["cancelled", "refunded"].includes(previousStatus) &&
-    ["cancelled", "refunded"].includes(status)
+    !["cancelled", "refunded", "returned"].includes(previousStatus) &&
+    ["cancelled", "refunded", "returned"].includes(normalizedStatus)
   ) {
     InventoryService.restoreForCancelledOrder(order).catch((error) =>
       console.error(`Inventory restore failed for order ${order._id}:`, error.message),
@@ -1306,6 +1322,8 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
     "out_for_delivery",
     "delivered",
     "cancelled",
+    "return_requested",
+    "returned",
     "refund_initiated",
     "refunded",
     "refund_failed",
@@ -1363,6 +1381,14 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
         order.deliveredAt = new Date();
       }
 
+      if (normalizedStatus === "return_requested") {
+        order.returnStatus = order.returnStatus || "requested";
+        order.returnRequestedAt = order.returnRequestedAt || new Date();
+      } else if (normalizedStatus === "returned") {
+        order.returnStatus = "completed";
+        order.returnedAt = order.returnedAt || new Date();
+      }
+
       if (normalizedStatus === "refund_initiated") {
         order.paymentStatus = "refund_initiated";
         order.refundStatus = "initiated";
@@ -1395,10 +1421,10 @@ const bulkUpdateOrderStatus = asyncHandler(async (req, res) => {
 
       await order.save();
 
-      // Restore inventory asynchronously if the order was cancelled or refunded
+      // Restore inventory asynchronously if the order was cancelled, refunded, or returned
       if (
-        !["cancelled", "refunded"].includes(previousStatus) &&
-        ["cancelled", "refunded"].includes(status)
+        !["cancelled", "refunded", "returned"].includes(previousStatus) &&
+        ["cancelled", "refunded", "returned"].includes(normalizedStatus)
       ) {
         InventoryService.restoreForCancelledOrder(order).catch((error) =>
           console.error(`Inventory restore failed for order ${order._id}:`, error.message),
@@ -1739,10 +1765,8 @@ const editOrder = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, order, "Order updated successfully", true));
 });
 
-// User-initiated cancellation of their own order. Only allowed while the
-// order hasn't shipped yet. Mirrors the admin status-update flow (inventory
-// restore, coupon usage release, status-update email) but scoped to the
-// order's owner and restricted to cancellable statuses.
+// User-initiated cancellation of their own order.
+// Allowed ONLY before "out_for_delivery" (i.e. pending, confirmed, processing, shipped).
 const cancelOrder = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const { id } = req.params;
@@ -1760,20 +1784,22 @@ const cancelOrder = asyncHandler(async (req, res) => {
       .json(new ApiResponse(404, null, "Order not found", false));
   }
 
-  const cancellableStatuses = ["pending", "confirmed", "processing", "shipped", "out_for_delivery", "delivered"];
+  // Cancel is allowed only before out for delivery
+  const cancellableStatuses = ["pending", "confirmed", "processing", "shipped"];
   if (!cancellableStatuses.includes(order.status)) {
+    let message = `Order cannot be cancelled once it is ${order.status.replace(/_/g, " ")}`;
+    if (order.status === "cancelled") {
+      message = "Order is already cancelled";
+    } else if (order.status === "out_for_delivery") {
+      message = "Order cannot be cancelled once it is out for delivery";
+    } else if (order.status === "delivered") {
+      message = "Order cannot be cancelled once it is delivered";
+    } else if (["return_requested", "returned"].includes(order.status)) {
+      message = "Order cannot be cancelled as a return has already been requested or processed";
+    }
     return res
       .status(400)
-      .json(
-        new ApiResponse(
-          400,
-          null,
-          order.status === "cancelled"
-            ? "Order is already cancelled"
-            : `Order cannot be cancelled once it is ${order.status}`,
-          false,
-        ),
-      );
+      .json(new ApiResponse(400, null, message, false));
   }
 
   const previousStatus = order.status;
@@ -1822,6 +1848,96 @@ const cancelOrder = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, order, "Order cancelled successfully", true));
 });
 
+// User-initiated return of their own order.
+// Allowed ONLY when the order status is "delivered".
+const returnOrder = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { id } = req.params;
+  const { reason, returnReason, notes } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findOne({ _id: id, user: userId });
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (["return_requested", "returned"].includes(order.status)) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          order.status === "return_requested"
+            ? "A return request has already been submitted for this order"
+            : "Order has already been returned",
+          false,
+        ),
+      );
+  }
+
+  // Return rule: Return can ONLY be requested after order is delivered
+  if (order.status !== "delivered") {
+    let msg = `Order can only be returned after it has been delivered. Current status: ${order.status.replace(/_/g, " ")}`;
+    if (order.status === "cancelled") {
+      msg = "Cancelled orders cannot be returned";
+    }
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, msg, false));
+  }
+
+  const previousStatus = order.status;
+  const targetReason = reason || returnReason || notes || "Customer return request";
+
+  order.status = "return_requested";
+  order.returnStatus = "requested";
+  order.returnReason = targetReason;
+  order.returnRequestedAt = new Date();
+
+  if (!order.emailTracking) {
+    order.emailTracking = { confirmation: {}, statusUpdates: [] };
+  }
+  order.emailTracking.statusUpdates.push({
+    status: order.status,
+    emailStatus: "queued",
+    queuedAt: new Date(),
+    attempts: 0,
+  });
+
+  await order.save();
+
+  setImmediate(async () => {
+    try {
+      const user = await User.findById(order.user);
+      if (user) {
+        await sendStatusUpdateEmails({
+          order: order.toObject(),
+          user: user.toObject(),
+          previousStatus,
+          updatedBy: null,
+        });
+      }
+    } catch (error) {
+      console.error(
+        `❌ Failed to send return request email for order ${order._id}:`,
+        error.message,
+      );
+    }
+  });
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, order, "Order return requested successfully", true));
+});
+
 const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
   try {
     const {
@@ -1844,7 +1960,11 @@ const getProductsWithOrderCounts = asyncHandler(async (req, res) => {
         "out_for_delivery",
         "delivered",
         "cancelled",
+        "return_requested",
+        "returned",
+        "refund_initiated",
         "refunded",
+        "refund_failed",
       ];
       const normStatus =
         status === "out for delivery" ? "out_for_delivery" : status;
@@ -2074,7 +2194,11 @@ const updateOrder = asyncHandler(async (req, res) => {
         "out_for_delivery",
         "delivered",
         "cancelled",
+        "return_requested",
+        "returned",
+        "refund_initiated",
         "refunded",
+        "refund_failed",
       ];
 
       const normStatus =
@@ -4332,6 +4456,7 @@ module.exports = {
   getOrderBill,
   editOrder,
   cancelOrder,
+  returnOrder,
   getProductsWithOrderCounts,
   getOrdersByProductId,
   getOrderByIdFormUser,

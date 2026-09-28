@@ -25,6 +25,11 @@ const getStatusInfo = (status) => {
       message: "Your order has been shipped and is on its way!",
       emoji: "🚚"
     },
+    out_for_delivery: {
+      color: "#8b5cf6",
+      message: "Your order is out for delivery and will arrive soon!",
+      emoji: "🛵"
+    },
     delivered: {
       color: "#10b981",
       message: "Your order has been delivered successfully!",
@@ -34,6 +39,16 @@ const getStatusInfo = (status) => {
       color: "#ef4444",
       message: "Your order has been cancelled.",
       emoji: "❌"
+    },
+    return_requested: {
+      color: "#f59e0b",
+      message: "Your return request has been submitted and is under review.",
+      emoji: "🔄"
+    },
+    returned: {
+      color: "#10b981",
+      message: "Your order return has been processed successfully.",
+      emoji: "↩️"
     },
     refund_initiated: {
       color: "#f59e0b",
