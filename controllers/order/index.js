@@ -3259,6 +3259,7 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
       }
 
       if (order) {
+        const previousStatus = order.status;
         const refundAmt = refund?.amount
           ? refund.amount / 100
           : (order.finalTotalAmount || 0);
@@ -3269,6 +3270,24 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
         order.paymentStatus = "refunded";
         order.status = "refunded";
         await order.save();
+
+        const user = await User.findById(order.user);
+        if (user && user.email) {
+          setImmediate(async () => {
+            try {
+              await sendStatusUpdateEmails({
+                order: order.toObject(),
+                user: user.toObject(),
+                previousStatus,
+              });
+            } catch (emailErr) {
+              console.error(
+                "❌ Failed to send webhook refund email:",
+                emailErr.message,
+              );
+            }
+          });
+        }
 
         InventoryService.restoreForCancelledOrder(order).catch((err) =>
           console.error(
@@ -3922,6 +3941,7 @@ const refundOrder = asyncHandler(async (req, res) => {
       refundOptions,
     );
 
+    const previousStatus = order.status;
     order.refundId = rzpRefund.id;
     order.refundAmount = refundAmount;
     order.refundStatus = "processed";
@@ -3929,6 +3949,23 @@ const refundOrder = asyncHandler(async (req, res) => {
     order.paymentStatus = "refunded";
     order.status = "refunded";
     await order.save();
+
+    // Send refund status update email
+    const user = await User.findById(order.user);
+    if (user && user.email) {
+      setImmediate(async () => {
+        try {
+          await sendStatusUpdateEmails({
+            order: order.toObject(),
+            user: user.toObject(),
+            previousStatus,
+            updatedBy: req.admin ? req.admin.toObject() : null,
+          });
+        } catch (emailErr) {
+          console.error("❌ Failed to send refund status email:", emailErr.message);
+        }
+      });
+    }
 
     InventoryService.restoreForCancelledOrder(order).catch((err) =>
       console.error(

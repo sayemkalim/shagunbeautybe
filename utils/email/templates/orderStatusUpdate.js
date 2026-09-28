@@ -35,6 +35,11 @@ const getStatusInfo = (status) => {
       message: "Your order has been cancelled.",
       emoji: "❌"
     },
+    refunded: {
+      color: "#8b5cf6",
+      message: "Your order has been refunded. The refund amount has been processed and will be credited to your original payment method.",
+      emoji: "💳"
+    },
   };
 
   return statusMap[status] || statusMap.pending;
