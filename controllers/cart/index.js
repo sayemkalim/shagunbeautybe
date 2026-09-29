@@ -4,6 +4,7 @@ const CartService = require("../../services/cart/index.js");
 const CouponService = require("../../services/coupon/index.js");
 const { calculateShippingCost } = require("../../utils/shipping/calculateShipping.js");
 const Inventory = require("../../models/inventoryModel.js");
+const { getAvailableStock } = require("../../utils/inventory/getAvailableStock.js");
 
 const getCart = asyncHandler(async (req, res) => {
   const user_id = req.user?._id;
@@ -84,20 +85,44 @@ const getCart = asyncHandler(async (req, res) => {
 
     cartWithPricing.items = cartWithPricing.items.map((item) => {
       const pId = item.product?._id ? item.product._id.toString() : item.product?.toString();
-      let avail = 0;
-      if (item.variant_sku) {
-        const vKey = `${pId}_${item.variant_sku}`;
-        avail = variantInventoryMap.has(vKey)
-          ? variantInventoryMap.get(vKey)
-          : (inventoryMap.has(pId) ? inventoryMap.get(pId) : 0);
-      } else {
-        avail = inventoryMap.has(pId) ? inventoryMap.get(pId) : 0;
+
+      let itemProductObj = item.product && typeof item.product === "object"
+        ? (item.product.toObject ? item.product.toObject() : { ...item.product })
+        : null;
+
+      if (itemProductObj) {
+        const baseAvail = inventoryMap.has(pId)
+          ? inventoryMap.get(pId)
+          : (itemProductObj.base_available_inventory !== undefined
+              ? itemProductObj.base_available_inventory
+              : (itemProductObj.inventory || 0));
+        itemProductObj.base_available_inventory = baseAvail;
+
+        if (Array.isArray(itemProductObj.variants)) {
+          itemProductObj.variants = itemProductObj.variants.map((v) => {
+            const vKey = `${pId}_${v.sku}`;
+            const vAvail = variantInventoryMap.has(vKey)
+              ? variantInventoryMap.get(vKey)
+              : (v.available_inventory !== undefined ? v.available_inventory : (v.inventory || 0));
+            return {
+              ...v,
+              available_inventory: vAvail,
+            };
+          });
+        }
       }
+
+      const avail = itemProductObj
+        ? getAvailableStock(itemProductObj, item.variant_sku || null)
+        : (item.variant_sku
+            ? (variantInventoryMap.get(`${pId}_${item.variant_sku}`) || 0)
+            : (inventoryMap.get(pId) || 0));
+
       return {
         ...item,
         available_inventory: avail,
-        product: item.product && typeof item.product === "object"
-          ? { ...item.product, available_inventory: avail }
+        product: itemProductObj
+          ? { ...itemProductObj, available_inventory: avail }
           : item.product,
       };
     });

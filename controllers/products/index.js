@@ -132,7 +132,9 @@ const getAllProducts = asyncHandler(async (req, res) => {
       const prodIdStr = product._id ? product._id.toString() : "";
       const baseAvailable = inventoryMap.has(prodIdStr)
         ? inventoryMap.get(prodIdStr)
-        : (product.inventory || 0);
+        : (product.base_available_inventory !== undefined
+            ? product.base_available_inventory
+            : (product.inventory || 0));
 
       const convertedProduct = {
         ...product,
@@ -235,7 +237,12 @@ const getProductById = asyncHandler(async (req, res) => {
   }
 
   const inventoryRecords = await Inventory.find({ product: id }).lean();
-  let baseAvailable = 0;
+  const hasBaseInvRecord = inventoryRecords.some((inv) => !inv.variant_sku);
+  let baseAvailable = hasBaseInvRecord
+    ? 0
+    : (product.base_available_inventory !== undefined
+        ? product.base_available_inventory
+        : (product.inventory || 0));
   const variantStockMap = new Map();
   let totalVariantStock = 0;
 

@@ -52,13 +52,25 @@ const ProductSchema = new mongoose.Schema(
     inventory: {
       type: Number,
       default: 0,
-      enum: [0, 1],
       min: 0,
-      max: 1,
+    },
+    base_available_inventory: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    available_inventory: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    is_out_of_stock: {
+      type: Boolean,
+      default: false,
     },
     status: {
       type: String,
-      enum: ["published", "draft"],
+      enum: ["published", "draft", "Out Of Stock"],
       default: "draft",
     },
     weight_in_grams: {
@@ -134,6 +146,9 @@ const ProductSchema = new mongoose.Schema(
           default: null,
         },
         inventory: { type: Number, default: 0, min: 0 },
+        available_inventory: { type: Number, default: 0, min: 0 },
+        is_out_of_stock: { type: Boolean, default: false },
+        status: { type: String, default: "published" },
         images: [String],
         color: { type: String, trim: true, default: null },
         weight_in_grams: { type: Number, min: 0, default: null },

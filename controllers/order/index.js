@@ -29,6 +29,7 @@ const Inventory = require("../../models/inventoryModel");
 const razorpay = require("../../config/razorpay");
 const InventoryService = require("../../services/inventory/index.js");
 const CouponService = require("../../services/coupon/index.js");
+const { getAvailableStock } = require("../../utils/inventory/getAvailableStock.js");
 const {
   getProductQuantityOptions,
   resolveProductUnitPrice,
@@ -167,32 +168,31 @@ const checkProductStock = async (productId, variantSku = null, requestedQuantity
   const invQuery = { product: product._id, variant_sku: variantSku || null };
   const inv = await Inventory.findOne(invQuery).lean();
 
-  let availableStock = 0;
+  const productForStock = product.toObject ? product.toObject() : { ...product };
+
   if (inv) {
-    availableStock = Math.max(
+    const avail = Math.max(
       (inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0),
       0
     );
-  } else {
-    if (vObj) {
-      availableStock =
-        typeof vObj.available_inventory === "number"
-          ? vObj.available_inventory
-          : typeof vObj.inventory === "number"
-          ? vObj.inventory
-          : 0;
+    if (variantSku && Array.isArray(productForStock.variants)) {
+      productForStock.variants = productForStock.variants.map((v) => {
+        if (v.sku === variantSku || v._id?.toString() === variantSku) {
+          return {
+            ...v,
+            available_inventory: avail,
+            qty_on_hand: inv.quantity_on_hand,
+          };
+        }
+        return v;
+      });
     } else {
-      availableStock =
-        typeof product.base_available_inventory === "number"
-          ? product.base_available_inventory
-          : typeof product.available_inventory === "number"
-          ? product.available_inventory
-          : typeof product.inventory === "number"
-          ? product.inventory
-          : 0;
+      productForStock.base_available_inventory = avail;
+      productForStock.qty_on_hand = inv.quantity_on_hand;
     }
   }
 
+  const availableStock = getAvailableStock(productForStock, variantSku);
   const isAvailable = availableStock > 0 && requestedQuantity <= availableStock;
   const productName = vObj?.name || product.name;
   const variantId = vObj?._id ? vObj._id.toString() : null;

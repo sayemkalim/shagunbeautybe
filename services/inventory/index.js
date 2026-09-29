@@ -145,20 +145,38 @@ const adjustStock = async ({
     if (variantSku) {
       await Product.updateOne(
         { _id: productId, "variants.sku": variantSku },
-        { $inc: { "variants.$.inventory": finalQuantityChange } }
+        {
+          $inc: {
+            "variants.$.inventory": finalQuantityChange,
+            "variants.$.available_inventory": finalQuantityChange,
+          },
+        }
       );
       await Product.updateOne(
         { _id: productId, "variants.sku": variantSku, "variants.inventory": { $lt: 0 } },
         { $set: { "variants.$.inventory": 0 } }
       );
+      await Product.updateOne(
+        { _id: productId, "variants.sku": variantSku, "variants.available_inventory": { $lt: 0 } },
+        { $set: { "variants.$.available_inventory": 0 } }
+      );
     } else {
       await Product.updateOne(
         { _id: productId },
-        { $inc: { inventory: finalQuantityChange } }
+        {
+          $inc: {
+            inventory: finalQuantityChange,
+            base_available_inventory: finalQuantityChange,
+          },
+        }
       );
       await Product.updateOne(
         { _id: productId, inventory: { $lt: 0 } },
         { $set: { inventory: 0 } }
+      );
+      await Product.updateOne(
+        { _id: productId, base_available_inventory: { $lt: 0 } },
+        { $set: { base_available_inventory: 0 } }
       );
     }
   } catch (syncErr) {
