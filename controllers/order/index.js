@@ -140,6 +140,76 @@ const resolveProductOrderItem = (product, quantity, variantSku = null) => {
   return { orderItem, itemTotal, discountedItemTotal, weightTotal };
 };
 
+// Checks live stock for a product or variant against Inventory DB records and Product fallbacks.
+const checkProductStock = async (productId, variantSku = null, requestedQuantity = 1) => {
+  const product = await Product.findById(productId);
+  if (!product) {
+    return {
+      found: false,
+      product: null,
+      variantObj: null,
+      productName: "Unknown Product",
+      productId: productId ? productId.toString() : null,
+      variantId: null,
+      requestedQuantity,
+      availableStock: 0,
+      isAvailable: false,
+    };
+  }
+
+  const vObj =
+    variantSku && Array.isArray(product.variants)
+      ? product.variants.find(
+          (v) => v.sku === variantSku || v._id?.toString() === variantSku
+        )
+      : null;
+
+  const invQuery = { product: product._id, variant_sku: variantSku || null };
+  const inv = await Inventory.findOne(invQuery).lean();
+
+  let availableStock = 0;
+  if (inv) {
+    availableStock = Math.max(
+      (inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0),
+      0
+    );
+  } else {
+    if (vObj) {
+      availableStock =
+        typeof vObj.available_inventory === "number"
+          ? vObj.available_inventory
+          : typeof vObj.inventory === "number"
+          ? vObj.inventory
+          : 0;
+    } else {
+      availableStock =
+        typeof product.base_available_inventory === "number"
+          ? product.base_available_inventory
+          : typeof product.available_inventory === "number"
+          ? product.available_inventory
+          : typeof product.inventory === "number"
+          ? product.inventory
+          : 0;
+    }
+  }
+
+  const isAvailable = availableStock > 0 && requestedQuantity <= availableStock;
+  const productName = vObj?.name || product.name;
+  const variantId = vObj?._id ? vObj._id.toString() : null;
+
+  return {
+    found: true,
+    product,
+    variantObj,
+    productName,
+    productId: product._id.toString(),
+    variantId,
+    requestedQuantity,
+    availableStock: Math.max(availableStock, 0),
+    isAvailable,
+  };
+};
+
 const exportOrders = asyncHandler(async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
@@ -367,8 +437,10 @@ const createGuestOrder = asyncHandler(async (req, res) => {
   let discountedTotalAmount = 0;
   let totalWeightGrams = 0;
   const orderItems = [];
+  const outOfStockItems = [];
 
   for (const item of items) {
+    const quantity = Number(item.quantity) || 1;
     if (item.type === "product") {
       if (
         !item.product_id ||
@@ -386,8 +458,13 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           );
       }
 
-      const product = await Product.findById(item.product_id);
-      if (!product) {
+      const stockCheck = await checkProductStock(
+        item.product_id,
+        item.variant_sku,
+        quantity
+      );
+
+      if (!stockCheck.found) {
         return res
           .status(400)
           .json(
@@ -400,9 +477,19 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           );
       }
 
-      const quantity = item.quantity || 1;
+      if (!stockCheck.isAvailable) {
+        outOfStockItems.push({
+          productId: stockCheck.productId,
+          variantId: stockCheck.variantId,
+          productName: stockCheck.productName,
+          requestedQuantity: quantity,
+          availableStock: stockCheck.availableStock,
+        });
+        continue;
+      }
+
       const { orderItem, itemTotal, discountedItemTotal, weightTotal } = resolveProductOrderItem(
-        product,
+        stockCheck.product,
         quantity,
         item.variant_sku
       );
@@ -438,11 +525,36 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           );
       }
 
+      let bundleOutOfStock = false;
+      if (bundle.products && Array.isArray(bundle.products)) {
+        for (const bundleProduct of bundle.products) {
+          const compQty = (bundleProduct.quantity || 1) * quantity;
+          const compCheck = await checkProductStock(
+            bundleProduct.product,
+            bundleProduct.variant_sku,
+            compQty
+          );
+          if (!compCheck.isAvailable) {
+            bundleOutOfStock = true;
+            outOfStockItems.push({
+              productId: compCheck.productId,
+              variantId: compCheck.variantId,
+              productName: `${bundle.name} - ${compCheck.productName}`,
+              requestedQuantity: compQty,
+              availableStock: compCheck.availableStock,
+            });
+          }
+        }
+      }
+
+      if (bundleOutOfStock) {
+        continue;
+      }
+
       const price = parseFloat(bundle.price.toString());
       const discountedPrice = bundle.discounted_price
         ? parseFloat(bundle.discounted_price.toString())
         : price;
-      const quantity = item.quantity || 1;
       const itemTotal = price * quantity;
       const discountedItemTotal = discountedPrice * quantity;
       totalAmount += itemTotal;
@@ -486,6 +598,15 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           ),
         );
     }
+  }
+
+  if (outOfStockItems.length > 0) {
+    const firstItemName = outOfStockItems[0].productName;
+    return res.status(400).json({
+      success: false,
+      message: `Item "${firstItemName}" is currently out of stock or requested quantity is unavailable.`,
+      outOfStockItems,
+    });
   }
 
   if (orderItems.length === 0) {
@@ -763,17 +884,23 @@ const prepareCartOrderData = async ({
     !mongoose.Types.ObjectId.isValid(cartId) ||
     !mongoose.Types.ObjectId.isValid(addressId)
   ) {
-    throw new Error("Invalid cart or address ID");
+    const err = new Error("Invalid cart or address ID");
+    err.statusCode = 400;
+    throw err;
   }
 
   const cart = await Cart.findOne({ _id: cartId, user: userId });
   if (!cart || cart.items.length === 0) {
-    throw new Error("Cart not found or empty");
+    const err = new Error("Cart not found or empty");
+    err.statusCode = 400;
+    throw err;
   }
 
   const address = await Address.findOne({ _id: addressId, user: userId });
   if (!address) {
-    throw new Error("Address not found");
+    const err = new Error("Address not found");
+    err.statusCode = 400;
+    throw err;
   }
 
   const hasSelectedFilter =
@@ -787,6 +914,7 @@ const prepareCartOrderData = async ({
   let totalWeightGrams = 0;
   const orderItems = [];
   const processedCartItemIds = [];
+  const outOfStockItems = [];
 
   for (const cartItem of cart.items) {
     const pIdStr = cartItem.product ? cartItem.product.toString() : "";
@@ -806,52 +934,37 @@ const prepareCartOrderData = async ({
       }
     }
 
+    const requestedQty = Number(cartItem.quantity) || 1;
+
     if (cartItem.type === "product") {
-      const product = await Product.findById(cartItem.product);
-      if (!product) continue;
+      const stockCheck = await checkProductStock(
+        cartItem.product,
+        cartItem.variant_sku,
+        requestedQty
+      );
 
-      // Live inventory check to ensure out of stock items are never ordered
-      const invQuery = { product: cartItem.product };
-      if (cartItem.variant_sku) {
-        invQuery.variant_sku = cartItem.variant_sku;
-      }
-      const inv = await Inventory.findOne(invQuery).lean();
-      let availableStock = 0;
-      if (inv) {
-        availableStock = Math.max(
-          (inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0),
-          0,
-        );
-      } else {
-        const vObj =
-          cartItem.variant_sku && Array.isArray(product.variants)
-            ? product.variants.find(
-                (v) =>
-                  v.sku === cartItem.variant_sku ||
-                  v._id?.toString() === cartItem.variant_sku,
-              )
-            : null;
-        availableStock = vObj
-          ? typeof vObj.available_inventory === "number"
-            ? vObj.available_inventory
-            : vObj.inventory || 0
-          : typeof product.available_inventory === "number"
-            ? product.available_inventory
-            : product.inventory || 0;
+      if (!stockCheck.found) {
+        const err = new Error(`Product not found: ${cartItem.product}`);
+        err.statusCode = 400;
+        throw err;
       }
 
-      if (availableStock <= 0) {
-        console.log(
-          `[prepareCartOrderData] Skipping out-of-stock product ${product.name} (available: ${availableStock})`,
-        );
+      if (!stockCheck.isAvailable) {
+        outOfStockItems.push({
+          productId: stockCheck.productId,
+          variantId: stockCheck.variantId,
+          productName: stockCheck.productName,
+          requestedQuantity: requestedQty,
+          availableStock: stockCheck.availableStock,
+        });
         continue;
       }
 
       const { orderItem, itemTotal, discountedItemTotal, weightTotal } =
         resolveProductOrderItem(
-          product,
-          cartItem.quantity,
-          cartItem.variant_sku,
+          stockCheck.product,
+          requestedQty,
+          cartItem.variant_sku
         );
       totalAmount += itemTotal;
       discountedTotalAmount += discountedItemTotal;
@@ -860,13 +973,44 @@ const prepareCartOrderData = async ({
       if (cartItem._id) processedCartItemIds.push(cartItem._id.toString());
     } else if (cartItem.type === "bundle") {
       const bundle = await Bundle.findById(cartItem.bundle);
-      if (!bundle) continue;
+      if (!bundle) {
+        const err = new Error(`Bundle not found: ${cartItem.bundle}`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      let bundleOutOfStock = false;
+      if (bundle.products && Array.isArray(bundle.products)) {
+        for (const bundleProduct of bundle.products) {
+          const compQty = (bundleProduct.quantity || 1) * requestedQty;
+          const compCheck = await checkProductStock(
+            bundleProduct.product,
+            bundleProduct.variant_sku,
+            compQty
+          );
+          if (!compCheck.isAvailable) {
+            bundleOutOfStock = true;
+            outOfStockItems.push({
+              productId: compCheck.productId,
+              variantId: compCheck.variantId,
+              productName: `${bundle.name} - ${compCheck.productName}`,
+              requestedQuantity: compQty,
+              availableStock: compCheck.availableStock,
+            });
+          }
+        }
+      }
+
+      if (bundleOutOfStock) {
+        continue;
+      }
+
       const price = parseFloat(bundle.price.toString());
       const discountedPrice = bundle.discounted_price
         ? parseFloat(bundle.discounted_price.toString())
         : price;
-      const itemTotal = price * cartItem.quantity;
-      const discountedItemTotal = discountedPrice * cartItem.quantity;
+      const itemTotal = price * requestedQty;
+      const discountedItemTotal = discountedPrice * requestedQty;
       totalAmount += itemTotal;
       discountedTotalAmount += discountedItemTotal;
 
@@ -877,7 +1021,7 @@ const prepareCartOrderData = async ({
             totalWeightGrams +=
               product.weight_in_grams *
               bundleProduct.quantity *
-              cartItem.quantity;
+              requestedQty;
           }
         }
       }
@@ -893,7 +1037,7 @@ const prepareCartOrderData = async ({
           description: bundle.description,
           products: bundle.products,
         },
-        quantity: cartItem.quantity,
+        quantity: requestedQty,
         total_amount: itemTotal,
         discounted_total_amount: discountedItemTotal,
       });
@@ -901,10 +1045,24 @@ const prepareCartOrderData = async ({
     }
   }
 
-  if (orderItems.length === 0) {
-    throw new Error(
-      "No available items to order. Selected item(s) are currently out of stock.",
+  if (outOfStockItems.length > 0) {
+    const firstItemName = outOfStockItems[0].productName;
+    const err = new Error(
+      `Item "${firstItemName}" is currently out of stock or requested quantity is unavailable.`
     );
+    err.statusCode = 400;
+    err.code = 400;
+    err.isOutOfStock = true;
+    err.outOfStockItems = outOfStockItems;
+    throw err;
+  }
+
+  if (orderItems.length === 0) {
+    const err = new Error(
+      "No available items to order from cart."
+    );
+    err.statusCode = 400;
+    throw err;
   }
 
   const addressSnapshot = { ...address.toObject() };
@@ -924,7 +1082,9 @@ const prepareCartOrderData = async ({
     });
 
     if (!couponResult.success) {
-      throw new Error(couponResult.message || "Invalid coupon code");
+      const err = new Error(couponResult.message || "Invalid coupon code");
+      err.statusCode = 400;
+      throw err;
     }
 
     couponDiscountAmount = couponResult.discount_amount;
@@ -981,6 +1141,13 @@ const createOrder = asyncHandler(async (req, res) => {
       selectedItemIds,
     });
   } catch (err) {
+    if (err.outOfStockItems && Array.isArray(err.outOfStockItems)) {
+      return res.status(400).json({
+        success: false,
+        message: err.message,
+        outOfStockItems: err.outOfStockItems,
+      });
+    }
     return res
       .status(400)
       .json(new ApiResponse(400, null, err.message, false));
@@ -1017,11 +1184,14 @@ const createOrder = asyncHandler(async (req, res) => {
     );
   }
 
-  // Deduct inventory asynchronously (non-blocking, best-effort)
-  InventoryService.deductForOrder(order).catch((error) =>
-    console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
-  );
+  // Deduct inventory atomically on order placement
+  try {
+    await InventoryService.deductForOrder(order);
+  } catch (error) {
+    console.error(`Inventory deduction failed for order ${order._id}:`, error.message);
+  }
 
+  // Clear only ordered items from the user's active cart in DB
   const orderedIdsSet = new Set(summary.processedCartItemIds);
   summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
   await summary.cart.save();
@@ -3601,6 +3771,54 @@ const createRazorpayOrder = asyncHandler(async (req, res) => {
           .json(new ApiResponse(400, null, "Order has already been paid", false));
       }
 
+      // Validate live inventory for all items in existing order
+      const outOfStockItems = [];
+      for (const item of order.items || []) {
+        if (item.type === "product" && item.product?._id) {
+          const stockCheck = await checkProductStock(
+            item.product._id,
+            item.variant_sku,
+            item.quantity || 1
+          );
+          if (!stockCheck.isAvailable) {
+            outOfStockItems.push({
+              productId: stockCheck.productId,
+              variantId: stockCheck.variantId,
+              productName: stockCheck.productName,
+              requestedQuantity: item.quantity || 1,
+              availableStock: stockCheck.availableStock,
+            });
+          }
+        } else if (item.type === "bundle" && item.bundle?.products) {
+          for (const bComp of item.bundle.products) {
+            const reqCompQty = (bComp.quantity || 1) * (item.quantity || 1);
+            const compCheck = await checkProductStock(
+              bComp.product,
+              bComp.variant_sku,
+              reqCompQty
+            );
+            if (!compCheck.isAvailable) {
+              outOfStockItems.push({
+                productId: compCheck.productId,
+                variantId: compCheck.variantId,
+                productName: `${item.bundle.name} - ${compCheck.productName}`,
+                requestedQuantity: reqCompQty,
+                availableStock: compCheck.availableStock,
+              });
+            }
+          }
+        }
+      }
+
+      if (outOfStockItems.length > 0) {
+        const firstItemName = outOfStockItems[0].productName;
+        return res.status(400).json({
+          success: false,
+          message: `Item "${firstItemName}" is currently out of stock or requested quantity is unavailable.`,
+          outOfStockItems,
+        });
+      }
+
       // Convert amount to paise
       const amountInPaise = Math.round(
         parseFloat(order.finalTotalAmount.toString()) * 100,
@@ -3670,6 +3888,13 @@ const createRazorpayOrder = asyncHandler(async (req, res) => {
         ),
       );
     } catch (error) {
+      if (error.outOfStockItems && Array.isArray(error.outOfStockItems)) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          outOfStockItems: error.outOfStockItems,
+        });
+      }
       console.error("Error creating Razorpay order:", error);
       return res
         .status(500)
@@ -3764,6 +3989,13 @@ const createRazorpayOrder = asyncHandler(async (req, res) => {
         ),
       );
     } catch (error) {
+      if (error.outOfStockItems && Array.isArray(error.outOfStockItems)) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          outOfStockItems: error.outOfStockItems,
+        });
+      }
       console.error("Error creating Razorpay order from cart:", error);
       return res
         .status(400)
@@ -3901,6 +4133,54 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
         );
       }
 
+      // Live stock check before confirming order
+      const outOfStockItems = [];
+      for (const item of order.items || []) {
+        if (item.type === "product" && item.product?._id) {
+          const stockCheck = await checkProductStock(
+            item.product._id,
+            item.variant_sku,
+            item.quantity || 1
+          );
+          if (!stockCheck.isAvailable) {
+            outOfStockItems.push({
+              productId: stockCheck.productId,
+              variantId: stockCheck.variantId,
+              productName: stockCheck.productName,
+              requestedQuantity: item.quantity || 1,
+              availableStock: stockCheck.availableStock,
+            });
+          }
+        } else if (item.type === "bundle" && item.bundle?.products) {
+          for (const bComp of item.bundle.products) {
+            const reqCompQty = (bComp.quantity || 1) * (item.quantity || 1);
+            const compCheck = await checkProductStock(
+              bComp.product,
+              bComp.variant_sku,
+              reqCompQty
+            );
+            if (!compCheck.isAvailable) {
+              outOfStockItems.push({
+                productId: compCheck.productId,
+                variantId: compCheck.variantId,
+                productName: `${item.bundle.name} - ${compCheck.productName}`,
+                requestedQuantity: reqCompQty,
+                availableStock: compCheck.availableStock,
+              });
+            }
+          }
+        }
+      }
+
+      if (outOfStockItems.length > 0) {
+        const firstItemName = outOfStockItems[0].productName;
+        return res.status(400).json({
+          success: false,
+          message: `Item "${firstItemName}" is currently out of stock or requested quantity is unavailable.`,
+          outOfStockItems,
+        });
+      }
+
       order.paymentStatus = "paid";
       order.paymentId = razorpay_payment_id;
       order.razorpayOrderId = razorpay_order_id;
@@ -3916,6 +4196,13 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
       }
 
       await order.save();
+
+      // Deduct inventory atomically
+      try {
+        await InventoryService.deductForOrder(order);
+      } catch (deductErr) {
+        console.error(`Inventory deduction failed for order ${order._id}:`, deductErr.message);
+      }
 
       try {
         await ensureOrderBillGenerated(order);
@@ -3935,6 +4222,13 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
         ),
       );
     } catch (error) {
+      if (error.outOfStockItems && Array.isArray(error.outOfStockItems)) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          outOfStockItems: error.outOfStockItems,
+        });
+      }
       console.error("Error verifying payment for existing order:", error);
       return res
         .status(500)
@@ -4011,13 +4305,32 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
         );
     }
 
-    const summary = await prepareCartOrderData({
-      userId: uid,
-      cartId: cId,
-      addressId: aId,
-      couponCode: cCode,
-      selectedItemIds: selItemIds,
-    });
+    let summary;
+    try {
+      summary = await prepareCartOrderData({
+        userId: uid,
+        cartId: cId,
+        addressId: aId,
+        couponCode: cCode,
+        selectedItemIds: selItemIds,
+      });
+    } catch (err) {
+      if (err.outOfStockItems && Array.isArray(err.outOfStockItems)) {
+        return res.status(400).json({
+          success: false,
+          message: err.message,
+          outOfStockItems: err.outOfStockItems,
+        });
+      }
+      return res.status(400).json(
+        new ApiResponse(
+          400,
+          null,
+          `Failed to place order after payment: ${err.message}`,
+          false,
+        ),
+      );
+    }
 
     const order = new Order({
       user: uid,
@@ -4055,10 +4368,12 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
       );
     }
 
-    // Deduct inventory
-    InventoryService.deductForOrder(order).catch((error) =>
-      console.error(`Inventory deduction failed for order ${order._id}:`, error.message),
-    );
+    // Deduct inventory atomically
+    try {
+      await InventoryService.deductForOrder(order);
+    } catch (error) {
+      console.error(`Inventory deduction failed for order ${order._id}:`, error.message);
+    }
 
     // Clear purchased items from cart
     const orderedIdsSet = new Set(summary.processedCartItemIds);
@@ -4087,6 +4402,13 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
       ),
     );
   } catch (error) {
+    if (error.outOfStockItems && Array.isArray(error.outOfStockItems)) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        outOfStockItems: error.outOfStockItems,
+      });
+    }
     console.error("Error creating order upon payment verification:", error);
     return res
       .status(500)

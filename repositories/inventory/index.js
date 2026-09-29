@@ -25,6 +25,31 @@ const updateQuantity = async (inventoryId, quantity, extra = {}) => {
   );
 };
 
+const decrementQuantityAtomic = async (inventoryId, deductAmount, extra = {}) => {
+  return await Inventory.findOneAndUpdate(
+    {
+      _id: inventoryId,
+      quantity_on_hand: { $gte: deductAmount },
+    },
+    {
+      $inc: { quantity_on_hand: -deductAmount },
+      $set: extra,
+    },
+    { new: true },
+  );
+};
+
+const incrementQuantityAtomic = async (inventoryId, addAmount, extra = {}) => {
+  return await Inventory.findByIdAndUpdate(
+    inventoryId,
+    {
+      $inc: { quantity_on_hand: addAmount },
+      $set: extra,
+    },
+    { new: true },
+  );
+};
+
 const updateThreshold = async (sku, lowStockThreshold) => {
   return await Inventory.findOneAndUpdate(
     { sku },
@@ -202,6 +227,8 @@ module.exports = {
   findByProductAndVariant,
   createInventory,
   updateQuantity,
+  decrementQuantityAtomic,
+  incrementQuantityAtomic,
   updateThreshold,
   listInventory,
   createMovement,

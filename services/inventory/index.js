@@ -63,6 +63,7 @@ const ensureInventoryRecord = async ({ productId, variantSku, sku, adminId = nul
 };
 
 // Core mutator. Positive quantityChange adds stock, negative removes it.
+// Uses atomic MongoDB operations ($inc with $gte conditions) to eliminate race conditions.
 // allowNegative=true clamps at 0 instead of throwing (used for best-effort
 // order-driven deductions, which never block checkout).
 const adjustStock = async ({
@@ -88,38 +89,88 @@ const adjustStock = async ({
     adminId,
   });
 
-  const quantityBefore = inventory.quantity_on_hand;
-  const rawAfter = quantityBefore + quantityChange;
-
-  let quantityAfter = rawAfter;
-  let finalNote = note;
-  if (rawAfter < 0) {
-    if (!allowNegative) {
-      throw new Error(
-        `Insufficient stock for SKU "${sku}": have ${quantityBefore}, requested change ${quantityChange}`,
-      );
-    }
-    quantityAfter = 0;
-    finalNote = note
-      ? `${note} (clamped: insufficient stock)`
-      : "clamped: insufficient stock";
-  }
-
+  const quantityBefore = inventory.quantity_on_hand || 0;
   const extra = {};
   if (type === "restock") extra.last_restocked_at = new Date();
 
-  const updatedInventory = await InventoryRepository.updateQuantity(
-    inventory._id,
-    quantityAfter,
-    extra,
-  );
+  let updatedInventory;
+  let finalQuantityChange = quantityChange;
+  let finalNote = note;
+
+  if (quantityChange < 0) {
+    const deductAmount = Math.abs(quantityChange);
+    // Atomic deduction if sufficient stock is available
+    updatedInventory = await InventoryRepository.decrementQuantityAtomic(
+      inventory._id,
+      deductAmount,
+      extra
+    );
+
+    if (!updatedInventory) {
+      if (!allowNegative) {
+        const currentInv = await InventoryRepository.findBySku(sku);
+        const currentQty = currentInv ? currentInv.quantity_on_hand : 0;
+        throw new Error(
+          `Insufficient stock for SKU "${sku}": have ${currentQty}, requested change ${quantityChange}`
+        );
+      }
+      // Clamping to 0 if allowNegative is true
+      const latestInv = await InventoryRepository.findBySku(sku);
+      const prevQty = latestInv ? latestInv.quantity_on_hand : 0;
+      finalQuantityChange = -prevQty;
+      updatedInventory = await InventoryRepository.updateQuantity(
+        inventory._id,
+        0,
+        extra
+      );
+      finalNote = note
+        ? `${note} (clamped: insufficient stock)`
+        : "clamped: insufficient stock";
+    }
+  } else {
+    // Atomic increment for restocking / stock restoration
+    updatedInventory = await InventoryRepository.incrementQuantityAtomic(
+      inventory._id,
+      quantityChange,
+      extra
+    );
+  }
+
+  const quantityAfter = updatedInventory
+    ? updatedInventory.quantity_on_hand
+    : Math.max(quantityBefore + finalQuantityChange, 0);
+
+  // Sync Product document's base / variant inventory field
+  try {
+    if (variantSku) {
+      await Product.updateOne(
+        { _id: productId, "variants.sku": variantSku },
+        { $inc: { "variants.$.inventory": finalQuantityChange } }
+      );
+      await Product.updateOne(
+        { _id: productId, "variants.sku": variantSku, "variants.inventory": { $lt: 0 } },
+        { $set: { "variants.$.inventory": 0 } }
+      );
+    } else {
+      await Product.updateOne(
+        { _id: productId },
+        { $inc: { inventory: finalQuantityChange } }
+      );
+      await Product.updateOne(
+        { _id: productId, inventory: { $lt: 0 } },
+        { $set: { inventory: 0 } }
+      );
+    }
+  } catch (syncErr) {
+    console.warn(`Product document inventory sync warning for ${sku}:`, syncErr.message);
+  }
 
   const movement = await InventoryRepository.createMovement({
     inventory: inventory._id,
     sku,
     product: productId,
     type,
-    quantity_change: quantityAfter - quantityBefore,
+    quantity_change: finalQuantityChange,
     quantity_before: quantityBefore,
     quantity_after: quantityAfter,
     reference_type: referenceType,
