@@ -200,7 +200,7 @@ const checkProductStock = async (productId, variantSku = null, requestedQuantity
   return {
     found: true,
     product,
-    variantObj,
+    variantObj: vObj,
     productName,
     productId: product._id.toString(),
     variantId,
