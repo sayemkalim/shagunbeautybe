@@ -35,6 +35,7 @@ function getAvailableStock(product, variantSku) {
     return 0;
   }
 
+  // Sirf base product ka apna isolated stock (combined product.available_inventory ignore hoga)
   if (
     product.base_available_inventory !== undefined &&
     product.base_available_inventory !== null
@@ -43,8 +44,7 @@ function getAvailableStock(product, variantSku) {
   }
 
   return Number(
-    product.available_inventory ??
-      product.qty_on_hand ??
+    product.qty_on_hand ??
       product.inventory ??
       0
   );
