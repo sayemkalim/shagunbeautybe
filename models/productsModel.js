@@ -83,6 +83,11 @@ const ProductSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    color_name: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     manufacturer: {
       type: String,
     },
@@ -151,6 +156,7 @@ const ProductSchema = new mongoose.Schema(
         status: { type: String, default: "published" },
         images: [String],
         color: { type: String, trim: true, default: null },
+        color_name: { type: String, trim: true, default: null },
         weight_in_grams: { type: Number, min: 0, default: null },
         expiry_date: { type: Date, default: null },
         price_tiers: [

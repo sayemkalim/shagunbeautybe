@@ -335,6 +335,9 @@ const createProduct = asyncHandler(async (req, res) => {
   if (Array.isArray(variants)) {
     for (let idx = 0; idx < variants.length; idx++) {
       const variant = variants[idx];
+      if (variant.color_name === undefined && variant.colorName !== undefined) {
+        variant.color_name = variant.colorName;
+      }
       if (variant.price_tiers !== undefined) {
         const vTierRes = parsePriceTiers(variant.price_tiers);
         if (vTierRes.error) {
@@ -356,15 +359,27 @@ const createProduct = asyncHandler(async (req, res) => {
         const variantImageFiles = files.filter(
           (f) => f.fieldname === `variants[${idx}][images]`
         );
+        let variantImages = [];
         if (variantImageFiles.length) {
-          variant.images = await uploadMultipleFiles(
+          variantImages = await uploadMultipleFiles(
             variantImageFiles,
             "uploads/images"
           );
-        } else {
-          variant.images = [];
+        } else if (Array.isArray(variant.images)) {
+          variantImages = variant.images;
         }
-        return variant;
+
+        return {
+          ...variant,
+          color: variant.color !== undefined ? variant.color : null,
+          color_name:
+            variant.color_name !== undefined
+              ? variant.color_name
+              : variant.colorName !== undefined
+              ? variant.colorName
+              : null,
+          images: variantImages,
+        };
       })
     );
   }
@@ -376,8 +391,12 @@ const createProduct = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, priceTiersResult.error, false));
   }
 
+  const color_name =
+    req.body.color_name !== undefined ? req.body.color_name : req.body.colorName;
+
   const productData = {
     ...req.body,
+    ...(color_name !== undefined ? { color_name } : {}),
     images: imageUrls,
     banner_image: bannerImageUrl,
     meta_data,
@@ -482,6 +501,9 @@ const updateProduct = asyncHandler(async (req, res) => {
   if (Array.isArray(variants)) {
     for (let idx = 0; idx < variants.length; idx++) {
       const variant = variants[idx];
+      if (variant.color_name === undefined && variant.colorName !== undefined) {
+        variant.color_name = variant.colorName;
+      }
       const existingVariant = product.variants?.find(
         (v) => (variant.sku && v.sku === variant.sku) || (variant._id && v._id?.toString() === variant._id?.toString())
       ) || product.variants?.[idx];
@@ -554,7 +576,17 @@ const updateProduct = asyncHandler(async (req, res) => {
             ? [...existingVariantImgs, ...uploadedVUrls]
             : existingVariantImgs;
         }
-        return { ...variant, images: variantImages };
+        return {
+          ...variant,
+          color: variant.color !== undefined ? variant.color : (existingVariant?.color || null),
+          color_name:
+            variant.color_name !== undefined
+              ? variant.color_name
+              : variant.colorName !== undefined
+              ? variant.colorName
+              : (existingVariant?.color_name || null),
+          images: variantImages,
+        };
       })
     );
   }
@@ -566,8 +598,12 @@ const updateProduct = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, priceTiersResult.error, false));
   }
 
+  const color_name =
+    req.body.color_name !== undefined ? req.body.color_name : req.body.colorName;
+
   const productData = {
     ...req.body,
+    ...(color_name !== undefined ? { color_name } : {}),
     images: productImages,
     banner_image: bannerImageUrl,
     meta_data,
@@ -897,6 +933,8 @@ const exportProducts = asyncHandler(async (req, res) => {
         ...baseProductData,
         variant_sku: variant.sku || "",
         variant_name: variant.name || "",
+        variant_color: variant.color || "",
+        variant_color_name: variant.color_name || "",
         variant_attributes: JSON.stringify(variant.attributes || {}),
         variant_price: handlePrice(variant.price),
         variant_discounted_price: handlePrice(variant.discounted_price),
@@ -913,6 +951,8 @@ const exportProducts = asyncHandler(async (req, res) => {
           ...baseProductData,
           variant_sku: "",
           variant_name: "",
+          variant_color: "",
+          variant_color_name: "",
           variant_attributes: "",
           variant_price: "",
           variant_discounted_price: "",

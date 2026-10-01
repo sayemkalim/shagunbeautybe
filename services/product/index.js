@@ -770,6 +770,15 @@ const processBatch = async (batch, startIndex, adminId, subCategoryMap, brandMap
       processedProduct.is_bakery = processBooleanField(productData, 'is_bakery');
       processedProduct.celiacFriendly = processBooleanField(productData, 'celiacFriendly');
 
+      // Process color and color_name fields
+      if (productData.color !== undefined) {
+        processedProduct.color = productData.color ? productData.color.toString().trim() : null;
+      }
+      if (productData.color_name !== undefined || productData.colorName !== undefined) {
+        const cName = productData.color_name !== undefined ? productData.color_name : productData.colorName;
+        processedProduct.color_name = cName ? cName.toString().trim() : null;
+      }
+
       // Clean up redundant fields
       Object.keys(processedProduct).forEach(key => {
         if (key.startsWith('photo_links') || key.toLowerCase().includes('photo')) {
