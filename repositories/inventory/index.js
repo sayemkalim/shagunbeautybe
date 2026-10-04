@@ -92,7 +92,9 @@ const listInventory = async ({ page = 1, per_page = 50, search = "", filter = "a
       $match: {
         $or: [
           { sku: { $regex: search, $options: "i" } },
+          { variant_sku: { $regex: search, $options: "i" } },
           { "product.name": { $regex: search, $options: "i" } },
+          { "product.variants.name": { $regex: search, $options: "i" } },
         ],
       },
     });
@@ -106,6 +108,30 @@ const listInventory = async ({ page = 1, per_page = 50, search = "", filter = "a
     { $skip: skip },
     { $limit: limit },
     {
+      $addFields: {
+        matched_variant: {
+          $cond: {
+            if: {
+              $and: [
+                { $ne: ["$variant_sku", null] },
+                { $ne: ["$variant_sku", ""] },
+              ],
+            },
+            then: {
+              $first: {
+                $filter: {
+                  input: { $ifNull: ["$product.variants", []] },
+                  as: "v",
+                  cond: { $eq: ["$$v.sku", "$variant_sku"] },
+                },
+              },
+            },
+            else: null,
+          },
+        },
+      },
+    },
+    {
       $project: {
         sku: 1,
         variant_sku: 1,
@@ -118,7 +144,23 @@ const listInventory = async ({ page = 1, per_page = 50, search = "", filter = "a
         "product._id": 1,
         "product.name": 1,
         "product.sku": 1,
+        "product.weight_in_grams": 1,
         "product.banner_image": 1,
+        variant_name: "$matched_variant.name",
+        variant_weight_in_grams: "$matched_variant.weight_in_grams",
+        variant: {
+          $cond: {
+            if: { $ne: ["$matched_variant", null] },
+            then: {
+              sku: "$matched_variant.sku",
+              name: "$matched_variant.name",
+              weight_in_grams: "$matched_variant.weight_in_grams",
+              color: "$matched_variant.color",
+              color_name: "$matched_variant.color_name",
+            },
+            else: null,
+          },
+        },
       },
     },
   ];
@@ -147,6 +189,7 @@ const listMovements = async ({ sku, product, page = 1, per_page = 50 }) => {
 
   const [data, total] = await Promise.all([
     StockMovement.find(query)
+      .populate("product", "name sku weight_in_grams banner_image")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -160,7 +203,7 @@ const getRecentMovements = async (limit = 10) => {
   return await StockMovement.find({})
     .sort({ createdAt: -1 })
     .limit(limit)
-    .populate("product", "name sku");
+    .populate("product", "name sku weight_in_grams");
 };
 
 const getStatsAggregation = async () => {

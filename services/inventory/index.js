@@ -271,16 +271,58 @@ const updateThresholdBySku = async (sku, lowStockThreshold) => {
 };
 
 const getBySku = async (sku) => {
-  const inventory = await InventoryRepository.findBySku(sku);
-  if (!inventory) {
+  const inventoryDoc = await InventoryRepository.findBySku(sku);
+  if (!inventoryDoc) {
     throw new Error(`SKU not found: ${sku}`);
   }
+
+  const product = await Product.findById(inventoryDoc.product)
+    .select("name sku weight_in_grams banner_image variants")
+    .lean();
+
+  let matchedVariant = null;
+  if (inventoryDoc.variant_sku && product && Array.isArray(product.variants)) {
+    matchedVariant =
+      product.variants.find((v) => v.sku === inventoryDoc.variant_sku) || null;
+  }
+
+  const inventoryObj = inventoryDoc.toObject
+    ? inventoryDoc.toObject()
+    : { ...inventoryDoc };
+
+  if (product) {
+    inventoryObj.product = {
+      _id: product._id,
+      name: product.name,
+      sku: product.sku,
+      weight_in_grams: product.weight_in_grams ?? null,
+      banner_image: product.banner_image,
+    };
+  }
+
+  if (matchedVariant) {
+    inventoryObj.variant_name = matchedVariant.name || null;
+    inventoryObj.variant_weight_in_grams =
+      matchedVariant.weight_in_grams ?? null;
+    inventoryObj.variant = {
+      sku: matchedVariant.sku,
+      name: matchedVariant.name,
+      weight_in_grams: matchedVariant.weight_in_grams ?? null,
+      color: matchedVariant.color,
+      color_name: matchedVariant.color_name,
+    };
+  } else {
+    inventoryObj.variant_name = null;
+    inventoryObj.variant_weight_in_grams = null;
+    inventoryObj.variant = null;
+  }
+
   const { data: recentMovements } = await InventoryRepository.listMovements({
     sku,
     page: 1,
     per_page: 10,
   });
-  return { inventory, recentMovements };
+  return { inventory: inventoryObj, recentMovements };
 };
 
 const listInventory = async (params) => InventoryRepository.listInventory(params);
