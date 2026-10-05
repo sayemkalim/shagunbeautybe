@@ -52,6 +52,31 @@ const formatDate = (date) =>
     day: "numeric",
   });
 
+// Generates consistent 6-digit INV-XXXXXX invoice number from order
+const getInvoiceNumber = (order) => {
+  if (order.invoiceNumber && String(order.invoiceNumber).startsWith("INV-")) {
+    return order.invoiceNumber;
+  }
+  const seedStr = String(order.orderNumber || order._id || Date.now());
+  let hash = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash = (hash * 31 + seedStr.charCodeAt(i)) % 900000;
+  }
+  const sixDigit = String(100000 + Math.abs(hash));
+  return `INV-${sixDigit}`;
+};
+
+// Formats order number with #OD- prefix (e.g. #OD-1024)
+const formatOrderNumber = (order) => {
+  const val = order.orderNumber || order._id;
+  if (!val) return "-";
+  const str = String(val).trim().replace(/^#/, "");
+  if (str.toUpperCase().startsWith("OD-")) {
+    return `#${str.toUpperCase()}`;
+  }
+  return `#OD-${str}`;
+};
+
 const getItemName = (item) =>
   item.type === "product"
     ? item.product?.name || "Product"
@@ -110,15 +135,17 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
     margin: 1,
   });
 
+  const invoiceId = getInvoiceNumber(order);
+
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
         size: "A4",
         margin: PAGE_MARGIN,
         info: {
-          Title: `Invoice - ${order.orderNumber || order._id}`,
+          Title: `Invoice - ${invoiceId}`,
           Author: COMPANY_NAME,
-          Subject: "Tax Invoice",
+          Subject: "Invoice",
         },
       });
 
@@ -137,8 +164,8 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
       // ==========================================
       const headerTop = PAGE_MARGIN + 5;
       let logoDrawn = false;
-      const logoWidth = 72;
-      const logoHeight = 39; // 72 / 1.837
+      const logoWidth = 110; // Prominent large logo
+      const logoHeight = 60; // Proportional aspect ratio (110 / 1.837)
 
       if (fs.existsSync(LOGO_PATH)) {
         try {
@@ -154,11 +181,11 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
         .fillColor(COLOR.primary)
         .font("Helvetica-Bold")
         .fontSize(13)
-        .text(COMPANY_NAME, companyBlockX, headerTop, { width: 220 });
+        .text(COMPANY_NAME, companyBlockX, headerTop + 2, { width: 200 });
 
-      let compY = headerTop + 16;
+      let compY = headerTop + 18;
       if (COMPANY_ADDRESS) {
-        doc.font("Helvetica").fontSize(8).fillColor(COLOR.muted).text(COMPANY_ADDRESS, companyBlockX, compY, { width: 220 });
+        doc.font("Helvetica").fontSize(8).fillColor(COLOR.muted).text(COMPANY_ADDRESS, companyBlockX, compY, { width: 200 });
         compY = doc.y + 2;
       }
       if (COMPANY_GSTIN) {
@@ -170,25 +197,18 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
         compY = doc.y + 2;
       }
 
-      // Right Header: TAX INVOICE & Meta
+      // Right Header: Invoice ID & Meta
       const rightColX = PAGE_MARGIN + 280;
       const rightColWidth = PAGE_WIDTH - 280;
 
+      let metaY = headerTop + 4;
       doc
         .font("Helvetica-Bold")
-        .fontSize(16)
+        .fontSize(14)
         .fillColor(COLOR.primary)
-        .text("TAX INVOICE", rightColX, headerTop, { width: rightColWidth, align: "right" });
+        .text(invoiceId, rightColX, metaY, { width: rightColWidth, align: "right" });
 
-      let metaY = headerTop + 20;
-      const invoiceNo = String(order.orderNumber || order._id);
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(9)
-        .fillColor(COLOR.primary)
-        .text(`Invoice #: ${invoiceNo}`, rightColX, metaY, { width: rightColWidth, align: "right" });
-
-      metaY += 13;
+      metaY += 18;
       doc
         .font("Helvetica")
         .fontSize(8.5)
@@ -221,7 +241,12 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
         });
 
       // Divider below header
-      let y = Math.max(compY, badgeY + badgeHeight + 4) + 12;
+      const headerMaxBottom = Math.max(
+        headerTop + (logoDrawn ? logoHeight : 0),
+        compY,
+        badgeY + badgeHeight + 4
+      );
+      let y = headerMaxBottom + 12;
       doc.strokeColor(COLOR.border).lineWidth(0.5).moveTo(PAGE_MARGIN, y).lineTo(PAGE_MARGIN + PAGE_WIDTH, y).stroke();
       y += 12;
 
@@ -251,7 +276,7 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
         formatPhone(phone, "Ph"),
       ].filter(Boolean);
 
-      // Estimate card height
+      // Card height
       const cardHeight = 82;
 
       // Left Card (Bill & Ship To)
@@ -279,7 +304,7 @@ const buildOrderBillPdfBuffer = async ({ order, customer }) => {
       };
 
       let metaCardY = cardTopY + 21;
-      renderMetaRow("Order ID:", `#${order.orderNumber || order._id}`, metaCardY, true);
+      renderMetaRow("Order ID:", formatOrderNumber(order), metaCardY, true);
       metaCardY += 12;
       renderMetaRow("Payment Method:", order.paymentMode || "Online", metaCardY);
       metaCardY += 12;

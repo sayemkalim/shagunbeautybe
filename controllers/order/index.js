@@ -229,7 +229,7 @@ const exportOrders = asyncHandler(async (req, res) => {
 
     // Prepare data for XLSX
     const xlsxData = orders.map((order) => ({
-      orderNumber: order.orderNumber ? `#${order.orderNumber}` : order._id.toString(),
+      orderNumber: order.orderNumber ? `#OD-${order.orderNumber}` : `#OD-${order._id.toString()}`,
       orderDate: order.createdAt,
       userName: order.user?.name || "",
       userEmail: order.user?.email || "",
