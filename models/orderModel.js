@@ -384,6 +384,14 @@ OrderSchema.set("toJSON", {
       ret.finalTotalAmount = parseFloat(ret.finalTotalAmount.toString());
     }
 
+    // Format orderNumber with OD- prefix in API responses
+    if (ret.orderNumber !== undefined && ret.orderNumber !== null) {
+      const numStr = String(ret.orderNumber).trim().replace(/^#/, "");
+      ret.orderNumber = numStr.toUpperCase().startsWith("OD-")
+        ? numStr.toUpperCase()
+        : `OD-${numStr}`;
+    }
+
     // Ensure ret.items is an array before mapping
     if (Array.isArray(ret.items)) {
       ret.items = ret.items.map(item => {
@@ -448,6 +456,14 @@ OrderSchema.set("toObject", {
     }
     if (ret.finalTotalAmount) {
       ret.finalTotalAmount = parseFloat(ret.finalTotalAmount.toString());
+    }
+
+    // Format orderNumber with OD- prefix in API responses
+    if (ret.orderNumber !== undefined && ret.orderNumber !== null) {
+      const numStr = String(ret.orderNumber).trim().replace(/^#/, "");
+      ret.orderNumber = numStr.toUpperCase().startsWith("OD-")
+        ? numStr.toUpperCase()
+        : `OD-${numStr}`;
     }
 
     if (Array.isArray(ret.items)) {
