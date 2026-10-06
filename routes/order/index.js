@@ -39,4 +39,16 @@ router.post("/razorpay/verify-payment", optionalUser, OrderController.verifyRazo
 router.post("/:id/refund", adminOrSuperAdmin, OrderController.refundOrder);
 router.patch("/:id/refund-status", adminOrSuperAdmin, OrderController.updateRefundStatus);
 
+// Shiprocket Shipping Admin Routes
+router.get("/shiprocket/serviceability", adminOrSuperAdmin, OrderController.checkShiprocketServiceability);
+router.post("/:id/shiprocket/create", adminOrSuperAdmin, OrderController.createShiprocketOrder);
+router.post("/:id/shiprocket/assign-awb", adminOrSuperAdmin, OrderController.assignShiprocketAwb);
+router.post("/:id/shiprocket/pickup", adminOrSuperAdmin, OrderController.generateShiprocketPickup);
+router.post("/:id/shiprocket/label", adminOrSuperAdmin, OrderController.generateShiprocketLabel);
+router.post("/:id/shiprocket/manifest", adminOrSuperAdmin, OrderController.generateShiprocketManifest);
+router.post("/:id/shiprocket/print-manifest", adminOrSuperAdmin, OrderController.printShiprocketManifest);
+router.get("/:id/shiprocket/tracking", adminOrSuperAdmin, OrderController.getShiprocketTracking);
+router.post("/:id/shiprocket/cancel", adminOrSuperAdmin, OrderController.cancelShiprocketOrder);
+
 module.exports = router;
+

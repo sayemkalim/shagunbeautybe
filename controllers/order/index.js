@@ -39,6 +39,54 @@ const path = require("path");
 const fs = require("fs/promises");
 const { uploadPDF } = require("../../utils/upload");
 const { buildOrderBillPdfBuffer } = require("../../utils/pdf/orderBill.js");
+const ShiprocketService = require("../../services/shiprocket/index.js");
+
+// Idempotently syncs an order with Shiprocket to create a shipping order.
+// Does not throw — records error on order and logs sanitized message if failure occurs.
+const syncOrderToShiprocket = async (order, { pickupLocation = null, logErrors = true } = {}) => {
+  if (!order) return null;
+
+  // Idempotency check: if already has shiprocketOrderId, return existing info
+  if (order.shipping && order.shipping.shiprocketOrderId) {
+    return {
+      success: true,
+      alreadyCreated: true,
+      shiprocketOrderId: order.shipping.shiprocketOrderId,
+      shipmentId: order.shipping.shipmentId,
+    };
+  }
+
+  try {
+    const result = await ShiprocketService.createOrder(order, pickupLocation);
+    if (!order.shipping) {
+      order.shipping = {};
+    }
+    order.shipping.provider = "shiprocket";
+    order.shipping.shiprocketOrderId = result.order_id ? String(result.order_id) : null;
+    order.shipping.shipmentId = result.shipment_id ? String(result.shipment_id) : null;
+    order.shipping.status = result.status || "NEW";
+    order.shipping.statusCode = result.status_code || null;
+    order.shipping.error = null;
+    await order.save();
+    return {
+      success: true,
+      data: result,
+    };
+  } catch (err) {
+    if (logErrors) {
+      console.error(`[Shiprocket Sync Error] Failed to sync order ${order._id}:`, err.message);
+    }
+    if (!order.shipping) {
+      order.shipping = {};
+    }
+    order.shipping.error = err.message;
+    await order.save().catch((saveErr) => console.error("Failed to save shipping error on order:", saveErr.message));
+    return {
+      success: false,
+      error: err.message,
+    };
+  }
+};
 
 // Idempotently generates + uploads the order's invoice PDF (skipped if
 // order.billUrl is already set) and persists the resulting URL on the order.
@@ -4769,6 +4817,744 @@ const updateRefundStatus = asyncHandler(async (req, res) => {
   );
 });
 
+/**
+ * Admin: Create order in Shiprocket for a specific order ID
+ */
+const createShiprocketOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { pickup_location } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  // Idempotency: if Shiprocket order already exists, return it
+  if (order.shipping?.shiprocketOrderId) {
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "Shiprocket order already created for this order",
+        true,
+      ),
+    );
+  }
+
+  const syncResult = await syncOrderToShiprocket(order, {
+    pickupLocation: pickup_location || null,
+    logErrors: true,
+  });
+
+  if (!syncResult.success) {
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        order,
+        `Shiprocket order creation failed: ${syncResult.error}`,
+        false,
+      ),
+    );
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      order,
+      "Shiprocket order created successfully",
+      true,
+    ),
+  );
+});
+
+/**
+ * Admin: Assign Courier / AWB to order shipment
+ */
+const assignShiprocketAwb = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { courier_id } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.shipping?.shipmentId) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "Shiprocket shipment ID does not exist for this order. Please create the Shiprocket order first.",
+          false,
+        ),
+      );
+  }
+
+  // Idempotency: if AWB already assigned, return existing
+  if (order.shipping?.awbCode) {
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "AWB is already assigned to this shipment",
+        true,
+      ),
+    );
+  }
+
+  try {
+    const result = await ShiprocketService.assignAwb({
+      shipmentId: order.shipping.shipmentId,
+      courierId: courier_id || null,
+    });
+
+    const awbData = result?.response?.data || result;
+    const awbCode = awbData?.awb_code || result?.awb_code || null;
+    const courierName = awbData?.courier_name || result?.courier_name || null;
+    const courierCompanyId = awbData?.courier_company_id || result?.courier_company_id || null;
+
+    if (!awbCode) {
+      throw new Error(
+        awbData?.message || result?.message || "Failed to retrieve AWB code from Shiprocket response",
+      );
+    }
+
+    order.shipping.awbCode = String(awbCode);
+    order.shipping.courierName = courierName;
+    order.shipping.courierCompanyId = courierCompanyId ? Number(courierCompanyId) : null;
+    order.shipping.status = "AWB Assigned";
+    order.shipping.error = null;
+
+    if (order.status === "pending" || order.status === "confirmed") {
+      order.status = "processing";
+    }
+
+    await order.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "AWB assigned successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket AWB Error] Order ${order._id}:`, err.message);
+    order.shipping.error = err.message;
+    await order.save().catch(() => {});
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to assign AWB: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Generate pickup request for shipment
+ */
+const generateShiprocketPickup = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { pickup_date } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.shipping?.shipmentId || !order.shipping?.awbCode) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "Shipment ID and AWB code are required before scheduling pickup",
+          false,
+        ),
+      );
+  }
+
+  // Idempotency: if pickup already scheduled
+  if (order.shipping?.pickupScheduledAt) {
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "Pickup is already scheduled for this shipment",
+        true,
+      ),
+    );
+  }
+
+  try {
+    const result = await ShiprocketService.generatePickup({
+      shipmentId: order.shipping.shipmentId,
+      pickupDate: pickup_date || null,
+    });
+
+    order.shipping.pickupScheduledAt = new Date();
+    order.shipping.pickupTokenNumber =
+      result?.response?.pickup_token_number ||
+      result?.pickup_token_number ||
+      null;
+    order.shipping.status = "Pickup Scheduled";
+    order.shipping.error = null;
+
+    await order.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "Pickup scheduled successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket Pickup Error] Order ${order._id}:`, err.message);
+    order.shipping.error = err.message;
+    await order.save().catch(() => {});
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to generate pickup: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Generate shipping label
+ */
+const generateShiprocketLabel = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.shipping?.shipmentId) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "Shipment ID is required to generate label",
+          false,
+        ),
+      );
+  }
+
+  try {
+    const result = await ShiprocketService.generateLabel({
+      shipmentId: order.shipping.shipmentId,
+    });
+
+    const labelUrl = result?.label_url || result?.label_created || order.shipping.labelUrl || null;
+    if (labelUrl) {
+      order.shipping.labelUrl = labelUrl;
+      await order.save();
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        { label_url: labelUrl, order },
+        "Shipping label generated successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket Label Error] Order ${order._id}:`, err.message);
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to generate label: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Generate shipping manifest
+ */
+const generateShiprocketManifest = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.shipping?.shipmentId) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "Shipment ID is required to generate manifest",
+          false,
+        ),
+      );
+  }
+
+  try {
+    const result = await ShiprocketService.generateManifest({
+      shipmentId: order.shipping.shipmentId,
+    });
+
+    const manifestUrl = result?.manifest_url || order.shipping.manifestUrl || null;
+    if (manifestUrl) {
+      order.shipping.manifestUrl = manifestUrl;
+      await order.save();
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        { manifest_url: manifestUrl, order },
+        "Shipping manifest generated successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket Manifest Error] Order ${order._id}:`, err.message);
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to generate manifest: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Print shipping manifest
+ */
+const printShiprocketManifest = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  const orderIdForManifest = order.shipping?.shiprocketOrderId || order.orderNumber || order._id;
+
+  try {
+    const result = await ShiprocketService.printManifest({
+      orderIds: [orderIdForManifest],
+    });
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        result,
+        "Manifest print response fetched successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket Print Manifest Error] Order ${order._id}:`, err.message);
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to print manifest: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Get live tracking info from Shiprocket
+ */
+const getShiprocketTracking = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  const awbCode = order.shipping?.awbCode;
+  const shipmentId = order.shipping?.shipmentId;
+
+  if (!awbCode && !shipmentId) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "No AWB code or Shipment ID found for this order. Please sync with Shiprocket and assign AWB first.",
+          false,
+        ),
+      );
+  }
+
+  try {
+    const result = awbCode
+      ? await ShiprocketService.trackByAwb(awbCode)
+      : await ShiprocketService.trackByShipmentId(shipmentId);
+
+    order.shipping.lastTrackingResponse = result;
+
+    // Check if tracking response has updated current status
+    const trackingData = result?.tracking_data || result;
+    const currentStatus =
+      trackingData?.shipment_track?.[0]?.current_status ||
+      trackingData?.track_status ||
+      null;
+
+    if (currentStatus) {
+      order.shipping.status = currentStatus;
+      const mapped = ShiprocketService.mapShiprocketStatusToInternal(currentStatus);
+      if (mapped && mapped !== order.status) {
+        order.status = mapped;
+        if (mapped === "out_for_delivery" && !order.outForDeliveryAt) {
+          order.outForDeliveryAt = new Date();
+        }
+        if (mapped === "delivered" && !order.deliveredAt) {
+          order.deliveredAt = new Date();
+          order.shipping.deliveredAt = new Date();
+        }
+      }
+    }
+
+    await order.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        { tracking: result, order },
+        "Shipment tracking fetched successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket Tracking Error] Order ${order._id}:`, err.message);
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to fetch tracking: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Cancel order in Shiprocket
+ */
+const cancelShiprocketOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.shipping?.shiprocketOrderId && !order.shipping?.awbCode) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "Order is not synchronized with Shiprocket",
+          false,
+        ),
+      );
+  }
+
+  try {
+    const result = await ShiprocketService.cancelOrder({
+      shiprocketOrderId: order.shipping?.shiprocketOrderId,
+      awbCode: order.shipping?.awbCode,
+    });
+
+    order.shipping.status = "CANCELLED";
+    order.shipping.cancelledAt = new Date();
+    await order.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        { result, order },
+        "Shiprocket order cancelled successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error(`[Shiprocket Cancel Error] Order ${order._id}:`, err.message);
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to cancel Shiprocket order: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Admin: Check courier serviceability
+ */
+const checkShiprocketServiceability = asyncHandler(async (req, res) => {
+  const { pickup_postcode, delivery_postcode, weight, cod } = req.query;
+
+  if (!pickup_postcode || !delivery_postcode) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "pickup_postcode and delivery_postcode are required query parameters",
+          false,
+        ),
+      );
+  }
+
+  try {
+    const result = await ShiprocketService.checkServiceability({
+      pickupPostcode: pickup_postcode,
+      deliveryPostcode: delivery_postcode,
+      weight: weight ? parseFloat(weight) : undefined,
+      cod: cod === "1" || cod === "true",
+    });
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        result,
+        "Courier serviceability fetched successfully",
+        true,
+      ),
+    );
+  } catch (err) {
+    console.error("[Shiprocket Serviceability Error]:", err.message);
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        `Failed to check serviceability: ${err.message}`,
+        false,
+      ),
+    );
+  }
+});
+
+/**
+ * Webhook: Handle Shiprocket tracking/status push notifications
+ */
+const handleShiprocketWebhook = asyncHandler(async (req, res) => {
+  const webhookToken = process.env.SHIPROCKET_WEBHOOK_TOKEN;
+  if (webhookToken) {
+    const headerToken =
+      req.headers["x-api-key"] ||
+      req.headers["authorization"]?.replace(/^Bearer\s+/i, "") ||
+      req.query.token;
+
+    if (headerToken !== webhookToken) {
+      console.warn("Unauthorized Shiprocket webhook attempt blocked");
+      return res.status(401).json({ success: false, message: "Unauthorized webhook request" });
+    }
+  }
+
+  const payload = req.body || {};
+  const {
+    awb,
+    shipment_id,
+    order_id,
+    current_status,
+    status,
+    courier_name,
+  } = payload;
+
+  const statusText = current_status || status;
+
+  if (!awb && !shipment_id && !order_id) {
+    return res.status(400).json({ success: false, message: "Missing tracking identifiers (awb, shipment_id, order_id)" });
+  }
+
+  // Find matching order in DB
+  const queryOrConditions = [];
+  if (awb) queryOrConditions.push({ "shipping.awbCode": String(awb).trim() });
+  if (shipment_id) queryOrConditions.push({ "shipping.shipmentId": String(shipment_id).trim() });
+  if (order_id) {
+    queryOrConditions.push({ "shipping.shiprocketOrderId": String(order_id).trim() });
+    if (mongoose.Types.ObjectId.isValid(order_id)) {
+      queryOrConditions.push({ _id: order_id });
+    }
+    const cleanNum = String(order_id).replace(/^OD-|^#/, "");
+    if (/^\d+$/.test(cleanNum)) {
+      queryOrConditions.push({ orderNumber: parseInt(cleanNum, 10) });
+    }
+  }
+
+  let order = null;
+  if (queryOrConditions.length > 0) {
+    order = await Order.findOne({ $or: queryOrConditions });
+  }
+
+  if (!order) {
+    console.log(`[Shiprocket Webhook] No matching order found for AWB: ${awb}, Shipment ID: ${shipment_id}, Order ID: ${order_id}`);
+    return res.status(200).json({ success: true, message: "Webhook acknowledged; order not found in local system" });
+  }
+
+  if (!order.shipping) {
+    order.shipping = {};
+  }
+
+  order.shipping.lastTrackingResponse = payload;
+  if (statusText) {
+    order.shipping.status = statusText;
+  }
+  if (courier_name && !order.shipping.courierName) {
+    order.shipping.courierName = courier_name;
+  }
+
+  const mappedInternalStatus = ShiprocketService.mapShiprocketStatusToInternal(statusText);
+  if (mappedInternalStatus && mappedInternalStatus !== order.status) {
+    const previousStatus = order.status;
+    order.status = mappedInternalStatus;
+
+    if (mappedInternalStatus === "shipped" && !order.shipping.shippedAt) {
+      order.shipping.shippedAt = new Date();
+    }
+    if (mappedInternalStatus === "out_for_delivery" && !order.outForDeliveryAt) {
+      order.outForDeliveryAt = new Date();
+    }
+    if (mappedInternalStatus === "delivered") {
+      order.deliveredAt = order.deliveredAt || new Date();
+      order.shipping.deliveredAt = order.shipping.deliveredAt || new Date();
+      if (order.paymentMode === "COD" && order.paymentStatus !== "paid") {
+        order.paymentStatus = "paid";
+        order.paidAt = order.paidAt || new Date();
+      }
+    }
+    if (mappedInternalStatus === "cancelled" && !order.shipping.cancelledAt) {
+      order.shipping.cancelledAt = new Date();
+    }
+
+    await order.save();
+
+    // Send customer update emails asynchronously
+    const user = order.user ? await User.findById(order.user) : null;
+    const targetUser =
+      user ||
+      (order.guestInfo?.email
+        ? { name: order.guestInfo.name || "Customer", email: order.guestInfo.email }
+        : order.address?.email
+        ? { name: order.address.name || "Customer", email: order.address.email }
+        : null);
+
+    if (targetUser && targetUser.email) {
+      setImmediate(async () => {
+        try {
+          await sendStatusUpdateEmails({
+            order: order.toObject(),
+            user: typeof targetUser.toObject === "function" ? targetUser.toObject() : targetUser,
+            previousStatus,
+            updatedBy: { name: "Shiprocket Webhook", role: "system" },
+          });
+        } catch (emailErr) {
+          console.error("❌ Failed to send status update email from Shiprocket webhook:", emailErr.message);
+        }
+      });
+    }
+  } else {
+    await order.save();
+  }
+
+  return res.status(200).json({ success: true, message: "Shiprocket webhook processed successfully" });
+});
+
 module.exports = {
   exportOrders,
   createOrder,
@@ -4794,4 +5580,16 @@ module.exports = {
   getRazorpayConfig,
   refundOrder,
   updateRefundStatus,
+  // Shiprocket exports
+  createShiprocketOrder,
+  assignShiprocketAwb,
+  generateShiprocketPickup,
+  generateShiprocketLabel,
+  generateShiprocketManifest,
+  printShiprocketManifest,
+  getShiprocketTracking,
+  cancelShiprocketOrder,
+  checkShiprocketServiceability,
+  handleShiprocketWebhook,
 };
+
