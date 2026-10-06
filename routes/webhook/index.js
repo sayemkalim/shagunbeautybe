@@ -6,4 +6,8 @@ const OrderController = require("../../controllers/order/index.js");
 // This endpoint should not require authentication as it's called by Razorpay
 router.post("/razorpay/payment", OrderController.handlePaymentWebhook);
 
+// Webhook endpoint for Shiprocket tracking & status updates
+router.post("/shiprocket", OrderController.handleShiprocketWebhook);
+
 module.exports = router;
+
