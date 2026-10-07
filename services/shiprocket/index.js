@@ -374,20 +374,107 @@ const createOrder = async (order, options = {}) => {
 };
 
 /**
+ * Helper to calculate volumetric and applicable weight
+ * volumetricWeight = (length * breadth * height) / 5000
+ * applicableWeight = Math.max(actualWeight, volumetricWeight)
+ */
+const calculateApplicableWeight = ({ weight = 0, length = 0, breadth = 0, height = 0 }) => {
+  const actualWeight = parseFloat(weight) || 0;
+  const l = parseFloat(length) || 0;
+  const b = parseFloat(breadth) || 0;
+  const h = parseFloat(height) || 0;
+
+  let volumetricWeight = 0;
+  if (l > 0 && b > 0 && h > 0) {
+    volumetricWeight = Math.round(((l * b * h) / 5000) * 100) / 100;
+  }
+
+  const applicableWeight = Math.max(actualWeight, volumetricWeight) || actualWeight || config.defaultDimensions.weight;
+  const finalWeight = Math.round(applicableWeight * 100) / 100;
+
+  return {
+    actualWeight,
+    volumetricWeight,
+    applicableWeight: finalWeight,
+  };
+};
+
+/**
  * 2. Check Courier Serviceability (/courier/serviceability/)
  */
-const checkServiceability = async ({ pickupPostcode, deliveryPostcode, weight, cod }) => {
-  const params = new URLSearchParams({
-    pickup_postcode: pickupPostcode || "",
-    delivery_postcode: deliveryPostcode || "",
-    weight: String(weight || config.defaultDimensions.weight),
-    cod: cod ? "1" : "0",
+const checkServiceability = async ({
+  pickupPostcode,
+  deliveryPostcode,
+  weight,
+  cod,
+  declaredValue,
+  length,
+  breadth,
+  height,
+  isReturn = 0,
+}) => {
+  const { actualWeight, volumetricWeight, applicableWeight } = calculateApplicableWeight({
+    weight,
+    length,
+    breadth,
+    height,
   });
 
-  log.info("Checking courier serviceability", { pickupPostcode, deliveryPostcode, weight, cod });
+  const isCod = cod === true || cod === "1" || cod === "true" || cod === 1;
+
+  const queryParams = {
+    pickup_postcode: String(pickupPostcode || "").trim(),
+    delivery_postcode: String(deliveryPostcode || "").trim(),
+    weight: String(applicableWeight),
+    cod: isCod ? "1" : "0",
+    is_return: String(isReturn || 0),
+  };
+
+  const parsedDeclaredValue = parseFloat(declaredValue);
+  if (!isNaN(parsedDeclaredValue) && parsedDeclaredValue > 0) {
+    queryParams.declared_value = String(parsedDeclaredValue);
+  }
+
+  const l = parseFloat(length) || 0;
+  const b = parseFloat(breadth) || 0;
+  const h = parseFloat(height) || 0;
+
+  if (l > 0) queryParams.length = String(l);
+  if (b > 0) queryParams.breadth = String(b);
+  if (h > 0) queryParams.height = String(h);
+
+  const params = new URLSearchParams(queryParams);
+
+  log.info("Checking courier serviceability with parameters:", {
+    pickup_postcode: queryParams.pickup_postcode,
+    delivery_postcode: queryParams.delivery_postcode,
+    weight: queryParams.weight,
+    cod: queryParams.cod,
+    declared_value: queryParams.declared_value,
+    length: queryParams.length,
+    breadth: queryParams.breadth,
+    height: queryParams.height,
+    actualWeight,
+    volumetricWeight,
+    applicableWeight,
+  });
 
   const result = await request(`/courier/serviceability/?${params.toString()}`, {
     method: "GET",
+  });
+
+  const availableCouriers = result?.data?.available_courier_companies || [];
+  log.info(`Courier serviceability response received with ${availableCouriers.length} couriers`, {
+    courierCount: availableCouriers.length,
+    couriers: availableCouriers.map((c) => ({
+      id: c.courier_company_id,
+      name: c.courier_name,
+      rate: c.rate,
+      freight_charge: c.freight_charge,
+      cod_charges: c.cod_charges,
+      etd: c.etd,
+      rating: c.rating,
+    })),
   });
 
   return result;
@@ -589,6 +676,7 @@ module.exports = {
   buildShiprocketOrderPayload,
   createOrder,
   checkServiceability,
+  calculateApplicableWeight,
   assignAwb,
   generatePickup,
   generateLabel,

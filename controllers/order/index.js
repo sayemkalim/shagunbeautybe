@@ -5576,17 +5576,38 @@ const cancelShiprocketOrder = asyncHandler(async (req, res) => {
  */
 const checkShiprocketServiceability = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  let { pickup_postcode, delivery_postcode, weight, cod, length, breadth, height } = {
+  let {
+    pickup_postcode,
+    delivery_postcode,
+    weight,
+    cod,
+    length,
+    breadth,
+    height,
+    declared_value,
+    order_value,
+    order_sub_total,
+  } = {
     ...req.query,
     ...req.body,
   };
+
+  let declaredValue = declared_value || order_value || order_sub_total;
 
   if (id && mongoose.Types.ObjectId.isValid(id)) {
     const order = await Order.findById(id);
     if (order) {
       delivery_postcode = delivery_postcode || order.address?.pincode;
       if (cod === undefined) {
-        cod = order.paymentMode === "COD";
+        cod = String(order.paymentMode || "").toUpperCase() === "COD";
+      }
+
+      if (declaredValue === undefined || declaredValue === null) {
+        declaredValue = order.finalTotalAmount
+          ? parseFloat(order.finalTotalAmount.toString())
+          : order.discountedTotalAmount
+            ? parseFloat(order.discountedTotalAmount.toString())
+            : 0;
       }
 
       // Persist package dimensions if provided
@@ -5623,8 +5644,11 @@ const checkShiprocketServiceability = asyncHandler(async (req, res) => {
       if (hasPackageUpdates) {
         order.shippingDetails.isManual = true;
         await order.save();
-      } else if (!weight && order.shippingDetails?.package?.weight) {
-        weight = order.shippingDetails.package.weight;
+      } else {
+        weight = weight || order.shippingDetails?.package?.weight;
+        length = length || order.shippingDetails?.package?.length;
+        breadth = breadth || order.shippingDetails?.package?.breadth;
+        height = height || order.shippingDetails?.package?.height;
       }
     }
   }
@@ -5650,8 +5674,12 @@ const checkShiprocketServiceability = asyncHandler(async (req, res) => {
     const result = await ShiprocketService.checkServiceability({
       pickupPostcode: pickup_postcode,
       deliveryPostcode: delivery_postcode,
-      weight: weight ? parseFloat(weight) : undefined,
+      weight,
       cod: cod === "1" || cod === "true" || cod === true,
+      declaredValue,
+      length,
+      breadth,
+      height,
     });
 
     return res.status(200).json(
