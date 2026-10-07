@@ -78,17 +78,21 @@ const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocat
     });
 
     const orderData =
+      result?.response?.data?.data ||
       result?.response?.data ||
+      result?.data?.data ||
       result?.data ||
       result;
 
     const shiprocketOrderId =
       orderData?.order_id ??
+      orderData?.orderId ??
       result?.order_id ??
       null;
 
     const shipmentId =
       orderData?.shipment_id ??
+      orderData?.shipmentId ??
       result?.shipment_id ??
       null;
 
@@ -99,7 +103,9 @@ const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocat
 
     const statusCode =
       orderData?.status_code ??
+      orderData?.statusCode ??
       result?.status_code ??
+      result?.statusCode ??
       null;
 
     if (!order.shipping) {

@@ -364,18 +364,20 @@ const createOrder = async (order, options = {}) => {
   });
 
   const orderData =
+    result?.response?.data?.data ||
     result?.response?.data ||
+    result?.data?.data ||
     result?.data ||
     result;
 
   const shiprocketOrderId =
     orderData?.order_id ??
-    result?.order_id ??
+    orderData?.orderId ??
     null;
 
   const shipmentId =
     orderData?.shipment_id ??
-    result?.shipment_id ??
+    orderData?.shipmentId ??
     null;
 
   const status =
@@ -385,7 +387,9 @@ const createOrder = async (order, options = {}) => {
 
   const statusCode =
     orderData?.status_code ??
+    orderData?.statusCode ??
     result?.status_code ??
+    result?.statusCode ??
     null;
 
   console.log("SHIPROCKET CREATE DEBUG", {
@@ -428,6 +432,17 @@ const createOrder = async (order, options = {}) => {
       result?.data && typeof result.data === "object"
         ? Object.keys(result.data)
         : [],
+  });
+
+  console.log("SHIPROCKET NORMALIZED PAYLOAD DEBUG", {
+    orderDataKeys:
+      orderData && typeof orderData === "object"
+        ? Object.keys(orderData)
+        : [],
+    orderId: shiprocketOrderId,
+    shipmentId,
+    status,
+    statusCode,
   });
 
   log.info("Shiprocket order created successfully", {
