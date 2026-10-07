@@ -90,6 +90,23 @@ const request = async (endpoint, options = {}, isRetry = false) => {
     headers,
   };
 
+  if (endpoint.includes("create") || options.method === "POST") {
+    let safeDataKeys = [];
+    if (options.body) {
+      try {
+        const parsed = JSON.parse(options.body);
+        safeDataKeys = Object.keys(parsed);
+      } catch (e) {}
+    }
+    console.log("SHIPROCKET CREATE REQUEST DEBUG", {
+      method: options.method || "GET",
+      url,
+      baseURL: config.baseUrl,
+      hasData: Boolean(options.body),
+      dataKeys: safeDataKeys,
+    });
+  }
+
   let response;
   try {
     response = await fetch(url, fetchOptions);
@@ -112,6 +129,21 @@ const request = async (endpoint, options = {}, isRetry = false) => {
       throw new Error(`Shiprocket request failed with status ${response.status}`);
     }
     throw new Error(`Failed to parse Shiprocket response for ${endpoint}`);
+  }
+
+  if (endpoint.includes("create") || options.method === "POST") {
+    console.log("SHIPROCKET CREATE RESPONSE META DEBUG", {
+      status: response?.status ?? null,
+      statusText: response?.statusText ?? null,
+      redirected: response?.redirected ?? false,
+      finalUrl: response?.url ?? url,
+      responseDataType: typeof data,
+      responseDataIsArray: Array.isArray(data),
+      responseDataKeys:
+        data && typeof data === "object"
+          ? Object.keys(data)
+          : [],
+    });
   }
 
   if (!response.ok) {
