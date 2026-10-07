@@ -43,8 +43,13 @@ const ShiprocketService = require("../../services/shiprocket/index.js");
 
 // Idempotently syncs an order with Shiprocket to create a shipping order.
 // Does not throw — records error on order and logs sanitized message if failure occurs.
-const syncOrderToShiprocket = async (order, { pickupLocation = null, logErrors = true } = {}) => {
+const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocation = null, logErrors = true } = {}) => {
   if (!order) return null;
+
+  // If user is referenced but not populated, populate it
+  if (order.user && !order.user.name && typeof order.populate === "function") {
+    await order.populate("user");
+  }
 
   // Idempotency check: if already has shiprocketOrderId, return existing info
   if (order.shipping && order.shipping.shiprocketOrderId) {
@@ -57,7 +62,10 @@ const syncOrderToShiprocket = async (order, { pickupLocation = null, logErrors =
   }
 
   try {
-    const result = await ShiprocketService.createOrder(order, pickupLocation);
+    const result = await ShiprocketService.createOrder(order, {
+      pickupLocation,
+      packageDetails,
+    });
     if (!order.shipping) {
       order.shipping = {};
     }
@@ -4823,7 +4831,7 @@ const updateRefundStatus = asyncHandler(async (req, res) => {
  */
 const createShiprocketOrder = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { pickup_location } = req.body;
+  const { weight, length, breadth, height, pickup_location } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res
@@ -4831,7 +4839,41 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, "Invalid order ID", false));
   }
 
-  const order = await Order.findById(id);
+  // Validate package details: weight, length, breadth, height are required and must be positive numbers
+  const parsedWeight = parseFloat(weight);
+  const parsedLength = parseFloat(length);
+  const parsedBreadth = parseFloat(breadth);
+  const parsedHeight = parseFloat(height);
+
+  if (
+    weight === undefined ||
+    weight === null ||
+    isNaN(parsedWeight) ||
+    parsedWeight <= 0 ||
+    length === undefined ||
+    length === null ||
+    isNaN(parsedLength) ||
+    parsedLength <= 0 ||
+    breadth === undefined ||
+    breadth === null ||
+    isNaN(parsedBreadth) ||
+    parsedBreadth <= 0 ||
+    height === undefined ||
+    height === null ||
+    isNaN(parsedHeight) ||
+    parsedHeight <= 0
+  ) {
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        "Package details (weight, length, breadth, height) are required and must be valid positive numbers",
+        false
+      )
+    );
+  }
+
+  const order = await Order.findById(id).populate("user");
   if (!order) {
     return res
       .status(404)
@@ -4851,6 +4893,12 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
   }
 
   const syncResult = await syncOrderToShiprocket(order, {
+    packageDetails: {
+      weight: parsedWeight,
+      length: parsedLength,
+      breadth: parsedBreadth,
+      height: parsedHeight,
+    },
     pickupLocation: pickup_location || null,
     logErrors: true,
   });

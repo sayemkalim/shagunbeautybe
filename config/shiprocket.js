@@ -2,7 +2,7 @@ module.exports = {
   email: process.env.SHIPROCKET_EMAIL || "",
   password: process.env.SHIPROCKET_PASSWORD || "",
   baseUrl: (process.env.SHIPROCKET_BASE_URL || "https://apiv2.shiprocket.in/v1/external").replace(/\/+$/, ""),
-  pickupLocation: process.env.SHIPROCKET_PICKUP_LOCATION || "Primary",
+  pickupLocation: process.env.SHIPROCKET_PICKUP_LOCATION || "Shagun Beauty",
   webhookToken: process.env.SHIPROCKET_WEBHOOK_TOKEN || "",
   defaultDimensions: {
     length: parseFloat(process.env.SHIPROCKET_DEFAULT_LENGTH || "10"),

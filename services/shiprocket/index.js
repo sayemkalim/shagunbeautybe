@@ -129,13 +129,60 @@ const request = async (endpoint, options = {}, isRetry = false) => {
 };
 
 /**
- * Helper to split full name into first and last name
+ * Helper to get customer full name from order
+ */
+const getCustomerName = (order) => {
+  const user = order.user && typeof order.user === "object" ? order.user : {};
+  const address = order.address || {};
+  const guestInfo = order.guestInfo || {};
+
+  const userName = (user.name || user.fullName || "").trim();
+  if (userName) return userName;
+
+  const addressName = (address.name || "").trim();
+  if (addressName) return addressName;
+
+  const guestName = (guestInfo.name || "").trim();
+  if (guestName) return guestName;
+
+  return "Customer";
+};
+
+/**
+ * Helper to split full name into first and last name.
+ * Does NOT append "Customer" to last name if single word name.
  */
 const splitFullName = (fullName = "") => {
-  const parts = String(fullName || "").trim().split(/\s+/);
+  const trimmed = String(fullName || "").trim();
+  if (!trimmed) {
+    return { firstName: "Customer", lastName: "" };
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
   const firstName = parts[0] || "Customer";
-  const lastName = parts.slice(1).join(" ") || "Customer";
+  const lastName = parts.slice(1).join(" ") || "";
   return { firstName, lastName };
+};
+
+/**
+ * Helper to resolve customer email from order / user
+ */
+const getCustomerEmail = (order, phone = "") => {
+  const user = order.user && typeof order.user === "object" ? order.user : {};
+  const guestInfo = order.guestInfo || {};
+  const address = order.address || {};
+
+  const userEmail = (user.email || "").trim();
+  if (userEmail) return userEmail;
+
+  const guestEmail = (guestInfo.email || "").trim();
+  if (guestEmail) return guestEmail;
+
+  const orderEmail = (order.email || address.email || "").trim();
+  if (orderEmail) return orderEmail;
+
+  // Fallback if no email is registered (do NOT use support@shagunbeauty.com)
+  const cleanPhone = phone || "customer";
+  return `${cleanPhone}@shagunbeauty.com`;
 };
 
 /**
@@ -143,6 +190,12 @@ const splitFullName = (fullName = "") => {
  */
 const sanitizePhone = (phone = "") => {
   let cleaned = String(phone || "").replace(/[^0-9]/g, "");
+  if (cleaned.length === 11 && cleaned.startsWith("0")) {
+    cleaned = cleaned.slice(1);
+  }
+  if (cleaned.length === 12 && cleaned.startsWith("91")) {
+    cleaned = cleaned.slice(2);
+  }
   if (cleaned.length > 10 && cleaned.startsWith("91")) {
     cleaned = cleaned.slice(2);
   }
@@ -166,21 +219,32 @@ const formatOrderDate = (date) => {
 /**
  * Prepare Shiprocket order creation payload from existing Order document
  */
-const buildShiprocketOrderPayload = (order, customPickupLocation = null) => {
+const buildShiprocketOrderPayload = (order, options = {}) => {
+  let customPickupLocation = null;
+  let packageDetails = null;
+
+  if (typeof options === "string") {
+    customPickupLocation = options;
+  } else if (options && typeof options === "object") {
+    customPickupLocation = options.pickupLocation || null;
+    packageDetails = options.packageDetails || null;
+  }
+
   const address = order.address || {};
-  const customerName = address.name || (order.isGuestOrder ? order.guestInfo?.name : "Customer") || "Customer";
+  const customerName = getCustomerName(order);
   const { firstName, lastName } = splitFullName(customerName);
-  const phone = sanitizePhone(address.mobile || (order.isGuestOrder ? order.guestInfo?.mobile : null));
-  const email = (order.isGuestOrder ? order.guestInfo?.email : null) || "support@shagunbeauty.com";
+
+  const rawPhone = address.mobile || (order.user && typeof order.user === "object" ? order.user.phone : null) || (order.isGuestOrder ? order.guestInfo?.mobile : null) || "";
+  const phone = sanitizePhone(rawPhone);
+
+  const email = getCustomerEmail(order, phone);
 
   // Build items list
-  let totalWeightKg = 0;
   const orderItems = (order.items || []).map((item, index) => {
     let name = "Product Item";
     let sku = item.variant_sku || `SKU-${order._id}-${index + 1}`;
     let sellingPrice = 0;
     let units = item.quantity || 1;
-    let itemWeightKg = 0;
 
     if (item.type === "product" && item.product) {
       name = item.product.name || "Product Item";
@@ -188,19 +252,13 @@ const buildShiprocketOrderPayload = (order, customPickupLocation = null) => {
         ? parseFloat(item.discounted_total_amount.toString()) / units
         : (item.product.discounted_price ? parseFloat(item.product.discounted_price.toString()) : (item.product.price ? parseFloat(item.product.price.toString()) : 0));
       sellingPrice = Math.round(productPrice * 100) / 100;
-
-      const grams = item.product.weight_in_grams || 0;
-      itemWeightKg = (grams > 0 ? grams / 1000 : config.defaultDimensions.weight) * units;
     } else if (item.type === "bundle" && item.bundle) {
       name = item.bundle.name || "Bundle Item";
       const bundlePrice = item.discounted_total_amount
         ? parseFloat(item.discounted_total_amount.toString()) / units
         : (item.bundle.discounted_price ? parseFloat(item.bundle.discounted_price.toString()) : (item.bundle.price ? parseFloat(item.bundle.price.toString()) : 0));
       sellingPrice = Math.round(bundlePrice * 100) / 100;
-      itemWeightKg = config.defaultDimensions.weight * units;
     }
-
-    totalWeightKg += itemWeightKg;
 
     return {
       name: name.slice(0, 250),
@@ -217,39 +275,50 @@ const buildShiprocketOrderPayload = (order, customPickupLocation = null) => {
   const shippingCharges = parseFloat(order.shippingCost ? order.shippingCost.toString() : "0");
   const totalDiscount = parseFloat(order.couponDiscountAmount ? order.couponDiscountAmount.toString() : "0");
 
-  const paymentMethod = order.paymentMode === "COD" ? "COD" : "Prepaid";
+  const paymentMethod = String(order.paymentMode || "").toUpperCase() === "COD" ? "COD" : "Prepaid";
 
   // Use orderNumber or fallback to _id
   const orderDisplayId = order.orderNumber
     ? `OD-${String(order.orderNumber).replace(/^OD-|^#/, "")}`
     : `ORD-${order._id}`;
 
-  const weightInKg = Math.max(0.1, Math.round((totalWeightKg || config.defaultDimensions.weight) * 100) / 100);
+  const weight = packageDetails?.weight !== undefined && packageDetails?.weight !== null
+    ? parseFloat(packageDetails.weight)
+    : config.defaultDimensions.weight;
+  const length = packageDetails?.length !== undefined && packageDetails?.length !== null
+    ? parseFloat(packageDetails.length)
+    : config.defaultDimensions.length;
+  const breadth = packageDetails?.breadth !== undefined && packageDetails?.breadth !== null
+    ? parseFloat(packageDetails.breadth)
+    : config.defaultDimensions.breadth;
+  const height = packageDetails?.height !== undefined && packageDetails?.height !== null
+    ? parseFloat(packageDetails.height)
+    : config.defaultDimensions.height;
 
   const payload = {
     order_id: orderDisplayId,
     order_date: formatOrderDate(order.createdAt),
-    pickup_location: customPickupLocation || config.pickupLocation,
+    pickup_location: customPickupLocation || config.pickupLocation || "Shagun Beauty",
     channel_id: "",
     comment: "Order from Shagun Beauty",
     billing_customer_name: firstName,
     billing_last_name: lastName,
-    billing_address: address.address || "Address",
+    billing_address: address.address || "",
     billing_address_2: [address.locality, address.landmark].filter(Boolean).join(", ") || "",
-    billing_city: address.city || "City",
+    billing_city: address.city || "",
     billing_pincode: String(address.pincode || "").trim(),
-    billing_state: address.state || "State",
+    billing_state: address.state || "",
     billing_country: "India",
     billing_email: email,
     billing_phone: phone,
     shipping_is_billing: true,
     shipping_customer_name: firstName,
     shipping_last_name: lastName,
-    shipping_address: address.address || "Address",
+    shipping_address: address.address || "",
     shipping_address_2: [address.locality, address.landmark].filter(Boolean).join(", ") || "",
-    shipping_city: address.city || "City",
+    shipping_city: address.city || "",
     shipping_pincode: String(address.pincode || "").trim(),
-    shipping_state: address.state || "State",
+    shipping_state: address.state || "",
     shipping_country: "India",
     shipping_email: email,
     shipping_phone: phone,
@@ -260,10 +329,10 @@ const buildShiprocketOrderPayload = (order, customPickupLocation = null) => {
     transaction_charges: 0,
     total_discount: totalDiscount,
     sub_total: subTotal,
-    length: config.defaultDimensions.length,
-    breadth: config.defaultDimensions.breadth,
-    height: config.defaultDimensions.height,
-    weight: weightInKg,
+    length,
+    breadth,
+    height,
+    weight,
   };
 
   return payload;
@@ -272,8 +341,21 @@ const buildShiprocketOrderPayload = (order, customPickupLocation = null) => {
 /**
  * 1. Create order in Shiprocket (/orders/create/adhoc)
  */
-const createOrder = async (order, customPickupLocation = null) => {
-  const payload = buildShiprocketOrderPayload(order, customPickupLocation);
+const createOrder = async (order, options = {}) => {
+  let customPickupLocation = null;
+  let packageDetails = null;
+
+  if (typeof options === "string") {
+    customPickupLocation = options;
+  } else if (options && typeof options === "object") {
+    customPickupLocation = options.pickupLocation || null;
+    packageDetails = options.packageDetails || null;
+  }
+
+  const payload = buildShiprocketOrderPayload(order, {
+    pickupLocation: customPickupLocation,
+    packageDetails,
+  });
   log.info("Creating Shiprocket order", { internalOrderId: order._id, orderDisplayId: payload.order_id });
 
   const result = await request("/orders/create/adhoc", {
