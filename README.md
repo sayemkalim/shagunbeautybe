@@ -57,18 +57,19 @@ SHIPROCKET_WEBHOOK_TOKEN=your-optional-webhook-secret-token
 
 All admin shipping routes are protected with `adminOrSuperAdmin` JWT role authentication (`Authorization: Bearer <token>`).
 
-| Method | Endpoint | Description | Request Body / Query |
-|---|---|---|---|
-| `GET` | `/api/order/shiprocket/serviceability` | Check available couriers & ETAs | Query: `pickup_postcode`, `delivery_postcode`, `weight`, `cod` |
-| `GET` | `/api/order/:id/shiprocket/serviceability` | Check serviceability using order pincode | Query: `pickup_postcode` (optional) |
-| `POST` | `/api/order/:id/shiprocket/create` | Sync / create order in Shiprocket | Body: `{ "pickup_location": "Primary" }` (optional) |
-| `POST` | `/api/order/:id/shiprocket/assign-awb` | Assign courier & generate AWB code | Body: `{ "courier_id": 123 }` (optional) |
-| `POST` | `/api/order/:id/shiprocket/pickup` | Schedule pickup with courier | Body: `{ "pickup_date": "YYYY-MM-DD" }` (optional) |
-| `POST` | `/api/order/:id/shiprocket/label` | Generate shipping label PDF URL | None |
-| `POST` | `/api/order/:id/shiprocket/manifest` | Generate shipment manifest | None |
-| `POST` | `/api/order/:id/shiprocket/print-manifest` | Print shipment manifest | None |
-| `GET` | `/api/order/:id/shiprocket/tracking` | Get live tracking details from Shiprocket | None |
-| `POST` | `/api/order/:id/shiprocket/cancel` | Cancel shipment/order in Shiprocket | None |
+| Method   | Endpoint                                     | Description                               | Request Body / Query                                                  |
+| -------- | -------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
+| `GET`  | `/api/order/shiprocket/serviceability`     | Check available couriers & ETAs           | Query:`pickup_postcode`, `delivery_postcode`, `weight`, `cod` |
+| `GET`  | `/api/order/:id/shiprocket/serviceability` | Check serviceability using order pincode  | Query:`pickup_postcode` (optional)                                  |
+| `PATCH`| `/api/order/:id/shipping-package`          | Set package dimensions (weight, L, B, H)  | Body: `{ "weight": 5, "length": 20, "breadth": 30, "height": 30 }`     |
+| `POST` | `/api/order/:id/shiprocket/create`         | Sync / create order in Shiprocket         | Body: `{ "weight": 0.5, "length": 10, "breadth": 10, "height": 5, "pickup_location": "Shagun Beauty" }` |
+| `POST` | `/api/order/:id/shiprocket/assign-awb`     | Assign courier & generate AWB code        | Body:`{ "courier_id": 123 }` (optional)                             |
+| `POST` | `/api/order/:id/shiprocket/pickup`         | Schedule pickup with courier              | Body:`{ "pickup_date": "YYYY-MM-DD" }` (optional)                   |
+| `POST` | `/api/order/:id/shiprocket/label`          | Generate shipping label PDF URL           | None                                                                  |
+| `POST` | `/api/order/:id/shiprocket/manifest`       | Generate shipment manifest                | None                                                                  |
+| `POST` | `/api/order/:id/shiprocket/print-manifest` | Print shipment manifest                   | None                                                                  |
+| `GET`  | `/api/order/:id/shiprocket/tracking`       | Get live tracking details from Shiprocket | None                                                                  |
+| `POST` | `/api/order/:id/shiprocket/cancel`         | Cancel shipment/order in Shiprocket       | None                                                                  |
 
 ---
 

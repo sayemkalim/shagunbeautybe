@@ -141,6 +141,24 @@ const OrderSchema = new mongoose.Schema({
       type: Boolean,
       default: false
     },
+    package: {
+      weight: {
+        type: Number,
+        default: null
+      },
+      length: {
+        type: Number,
+        default: null
+      },
+      breadth: {
+        type: Number,
+        default: null
+      },
+      height: {
+        type: Number,
+        default: null
+      }
+    },
     calculatedAt: Date
   },
   shipping: {

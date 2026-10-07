@@ -19,6 +19,7 @@ router.get("/products-with-orders", adminOrSuperAdmin, OrderController.getProduc
 router.get("/by-product/:productId", adminOrSuperAdmin, OrderController.getOrdersByProductId);
 router.get("/:id/email-status", adminOrSuperAdmin, OrderController.getOrderEmailStatus);
 router.patch("/:id", adminOrSuperAdmin, OrderController.updateOrder);
+router.patch("/:id/shipping-package", adminOrSuperAdmin, OrderController.updateShippingPackage);
 router.patch("/:id/status", adminOrSuperAdmin, OrderController.updateOrderStatus);
 router.patch("/edit/:id", user, OrderController.editOrder);
 router.patch("/payment/:id/cancel", user, OrderController.cancelOrder);

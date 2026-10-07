@@ -51,6 +51,16 @@ const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocat
     await order.populate("user");
   }
 
+  // Fallback to order's persisted shippingDetails.package if packageDetails not explicitly provided
+  if (!packageDetails && order.shippingDetails?.package?.weight && order.shippingDetails?.package?.length) {
+    packageDetails = {
+      weight: order.shippingDetails.package.weight,
+      length: order.shippingDetails.package.length,
+      breadth: order.shippingDetails.package.breadth,
+      height: order.shippingDetails.package.height,
+    };
+  }
+
   // Idempotency check: if already has shiprocketOrderId, return existing info
   if (order.shipping && order.shipping.shiprocketOrderId) {
     return {
@@ -4827,16 +4837,131 @@ const updateRefundStatus = asyncHandler(async (req, res) => {
 });
 
 /**
- * Admin: Create order in Shiprocket for a specific order ID
+ * Admin: Save package details (weight, dimensions) for an order
+ * PATCH /api/order/:id/shipping-package
  */
-const createShiprocketOrder = asyncHandler(async (req, res) => {
+const updateShippingPackage = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { weight, length, breadth, height, pickup_location } = req.body;
+  const { weight, length, breadth, height } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res
       .status(400)
       .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const parsedWeight = parseFloat(weight);
+  const parsedLength = parseFloat(length);
+  const parsedBreadth = parseFloat(breadth);
+  const parsedHeight = parseFloat(height);
+
+  if (
+    weight === undefined ||
+    weight === null ||
+    isNaN(parsedWeight) ||
+    parsedWeight <= 0 ||
+    length === undefined ||
+    length === null ||
+    isNaN(parsedLength) ||
+    parsedLength <= 0 ||
+    breadth === undefined ||
+    breadth === null ||
+    isNaN(parsedBreadth) ||
+    parsedBreadth <= 0 ||
+    height === undefined ||
+    height === null ||
+    isNaN(parsedHeight) ||
+    parsedHeight <= 0
+  ) {
+    return res.status(400).json(
+      new ApiResponse(
+        400,
+        null,
+        "Package details (weight in kg, length, breadth, and height in cm) are required and must be valid numbers greater than 0",
+        false
+      )
+    );
+  }
+
+  const order = await Order.findById(id);
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  if (!order.shippingDetails) {
+    order.shippingDetails = {};
+  }
+
+  order.shippingDetails.isManual = true;
+  order.shippingDetails.package = {
+    weight: parsedWeight,
+    length: parsedLength,
+    breadth: parsedBreadth,
+    height: parsedHeight,
+  };
+
+  await order.save();
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      order,
+      "Shipping package details saved successfully",
+      true
+    )
+  );
+});
+
+/**
+ * Admin: Create order in Shiprocket for a specific order ID
+ */
+const createShiprocketOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { pickup_location } = req.body;
+  let { weight, length, breadth, height } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Invalid order ID", false));
+  }
+
+  const order = await Order.findById(id).populate("user");
+  if (!order) {
+    return res
+      .status(404)
+      .json(new ApiResponse(404, null, "Order not found", false));
+  }
+
+  // Idempotency: if Shiprocket order already exists, return it
+  if (order.shipping?.shiprocketOrderId) {
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        order,
+        "Shiprocket order already created for this order",
+        true,
+      ),
+    );
+  }
+
+  // If dimensions not in body, fallback to saved shippingDetails.package if available
+  if (
+    (weight === undefined || weight === null) &&
+    (length === undefined || length === null) &&
+    (breadth === undefined || breadth === null) &&
+    (height === undefined || height === null) &&
+    order.shippingDetails?.package?.weight &&
+    order.shippingDetails?.package?.length &&
+    order.shippingDetails?.package?.breadth &&
+    order.shippingDetails?.package?.height
+  ) {
+    weight = order.shippingDetails.package.weight;
+    length = order.shippingDetails.package.length;
+    breadth = order.shippingDetails.package.breadth;
+    height = order.shippingDetails.package.height;
   }
 
   // Validate package details: weight, length, breadth, height are required and must be positive numbers
@@ -4873,24 +4998,18 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
     );
   }
 
-  const order = await Order.findById(id).populate("user");
-  if (!order) {
-    return res
-      .status(404)
-      .json(new ApiResponse(404, null, "Order not found", false));
+  // Persist package details to order document
+  if (!order.shippingDetails) {
+    order.shippingDetails = {};
   }
-
-  // Idempotency: if Shiprocket order already exists, return it
-  if (order.shipping?.shiprocketOrderId) {
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        order,
-        "Shiprocket order already created for this order",
-        true,
-      ),
-    );
-  }
+  order.shippingDetails.isManual = true;
+  order.shippingDetails.package = {
+    weight: parsedWeight,
+    length: parsedLength,
+    breadth: parsedBreadth,
+    height: parsedHeight,
+  };
+  await order.save();
 
   const syncResult = await syncOrderToShiprocket(order, {
     packageDetails: {
@@ -5644,6 +5763,7 @@ module.exports = {
   getRazorpayConfig,
   refundOrder,
   updateRefundStatus,
+  updateShippingPackage,
   // Shiprocket exports
   createShiprocketOrder,
   assignShiprocketAwb,
