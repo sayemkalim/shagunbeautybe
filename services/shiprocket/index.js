@@ -54,6 +54,15 @@ const getShiprocketToken = async (forceRefresh = false) => {
 
     const data = await response.json();
 
+    console.log("SHIPROCKET AUTH RESPONSE DEBUG", {
+      status: response?.status ?? null,
+      hasToken: Boolean(data?.token),
+      dataKeys:
+        data && typeof data === "object"
+          ? Object.keys(data)
+          : [],
+    });
+
     if (!response.ok || !data.token) {
       const errMsg = data.message || (data.errors ? JSON.stringify(data.errors) : `HTTP ${response.status}`);
       throw new Error(`Shiprocket login failed: ${errMsg}`);
@@ -91,6 +100,15 @@ const request = async (endpoint, options = {}, isRetry = false) => {
   };
 
   if (endpoint.includes("create") || options.method === "POST") {
+    console.log("SHIPROCKET AUTH DEBUG", {
+      hasAuthorization: Boolean(headers.Authorization),
+      authorizationPrefix:
+        typeof headers.Authorization === "string"
+          ? headers.Authorization.slice(0, 7)
+          : null,
+      contentType: headers["Content-Type"] || headers["content-type"] || null,
+    });
+
     let safeDataKeys = [];
     if (options.body) {
       try {
