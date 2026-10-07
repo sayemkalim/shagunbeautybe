@@ -433,6 +433,11 @@ const checkServiceability = async ({
   const parsedDeclaredValue = parseFloat(declaredValue);
   if (!isNaN(parsedDeclaredValue) && parsedDeclaredValue > 0) {
     queryParams.declared_value = String(parsedDeclaredValue);
+    queryParams.order_sub_total = String(parsedDeclaredValue);
+    queryParams.sub_total = String(parsedDeclaredValue);
+    if (isCod) {
+      queryParams.cod_amount = String(parsedDeclaredValue);
+    }
   }
 
   const l = parseFloat(length) || 0;
@@ -445,7 +450,7 @@ const checkServiceability = async ({
 
   const params = new URLSearchParams(queryParams);
 
-  log.info("Checking courier serviceability with parameters:", {
+  console.log("SHIPROCKET OUTGOING SERVICEABILITY REQUEST:", {
     pickup_postcode: queryParams.pickup_postcode,
     delivery_postcode: queryParams.delivery_postcode,
     weight: queryParams.weight,
@@ -454,28 +459,37 @@ const checkServiceability = async ({
     length: queryParams.length,
     breadth: queryParams.breadth,
     height: queryParams.height,
-    actualWeight,
-    volumetricWeight,
-    applicableWeight,
+    is_return: queryParams.is_return,
   });
+
+  const finalUrl = `${config.baseUrl}/courier/serviceability/?${params.toString()}`;
+  console.log("SHIPROCKET FINAL URL:", finalUrl);
+  console.log("SHIPROCKET PARAMS OBJECT:", queryParams);
 
   const result = await request(`/courier/serviceability/?${params.toString()}`, {
     method: "GET",
   });
 
-  const availableCouriers = result?.data?.available_courier_companies || [];
-  log.info(`Courier serviceability response received with ${availableCouriers.length} couriers`, {
-    courierCount: availableCouriers.length,
-    couriers: availableCouriers.map((c) => ({
-      id: c.courier_company_id,
-      name: c.courier_name,
-      rate: c.rate,
+  const couriers = result?.data?.available_courier_companies || [];
+  const ekartAmazonSummary = couriers
+    .filter((c) => {
+      const name = String(c.courier_name || "").toLowerCase();
+      return name.includes("ekart") || name.includes("amazon");
+    })
+    .map((c) => ({
+      courier_name: c.courier_name,
       freight_charge: c.freight_charge,
       cod_charges: c.cod_charges,
-      etd: c.etd,
-      rating: c.rating,
-    })),
-  });
+      rate: c.rate,
+      charge_weight: c.charge_weight || c.chargeable_weight,
+      coverage_charges: c.coverage_charges,
+      other_charges: c.other_charges,
+      surge: c.surge,
+      zone: c.zone,
+      recommended_lt: c.recommended_lt || c.is_recommended,
+    }));
+
+  console.log("SHIPROCKET RESPONSE SUMMARY (Ekart & Amazon):", JSON.stringify(ekartAmazonSummary, null, 2));
 
   return result;
 };
