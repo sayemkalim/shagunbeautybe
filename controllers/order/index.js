@@ -76,19 +76,47 @@ const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocat
       pickupLocation,
       packageDetails,
     });
+
+    const orderData =
+      result?.response?.data ||
+      result?.data ||
+      result;
+
+    const shiprocketOrderId =
+      orderData?.order_id ??
+      result?.order_id ??
+      null;
+
+    const shipmentId =
+      orderData?.shipment_id ??
+      result?.shipment_id ??
+      null;
+
+    const status =
+      orderData?.status ??
+      result?.status ??
+      "NEW";
+
+    const statusCode =
+      orderData?.status_code ??
+      result?.status_code ??
+      null;
+
     if (!order.shipping) {
       order.shipping = {};
     }
     order.shipping.provider = "shiprocket";
-    order.shipping.shiprocketOrderId = result.order_id ? String(result.order_id) : null;
-    order.shipping.shipmentId = result.shipment_id ? String(result.shipment_id) : null;
-    order.shipping.status = result.status || "NEW";
-    order.shipping.statusCode = result.status_code || null;
+    order.shipping.shiprocketOrderId = shiprocketOrderId ? String(shiprocketOrderId) : null;
+    order.shipping.shipmentId = shipmentId ? String(shipmentId) : null;
+    order.shipping.status = status || "NEW";
+    order.shipping.statusCode = statusCode != null ? Number(statusCode) : null;
     order.shipping.error = null;
     await order.save();
     return {
       success: true,
       data: result,
+      shiprocketOrderId: order.shipping.shiprocketOrderId,
+      shipmentId: order.shipping.shipmentId,
     };
   } catch (err) {
     if (logErrors) {
@@ -5044,11 +5072,13 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
     logErrors: true,
   });
 
+  const updatedOrder = (await Order.findById(id).populate("user")) || order;
+
   if (!syncResult.success) {
     return res.status(400).json(
       new ApiResponse(
         400,
-        order,
+        updatedOrder,
         `Shiprocket order creation failed: ${syncResult.error}`,
         false,
       ),
@@ -5058,7 +5088,7 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
   return res.status(200).json(
     new ApiResponse(
       200,
-      order,
+      updatedOrder,
       "Shiprocket order created successfully",
       true,
     ),

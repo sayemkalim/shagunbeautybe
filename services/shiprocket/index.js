@@ -363,14 +363,54 @@ const createOrder = async (order, options = {}) => {
     body: JSON.stringify(payload),
   });
 
-  log.info("Shiprocket order created successfully", {
-    internalOrderId: order._id,
-    shiprocketOrderId: result.order_id,
-    shipmentId: result.shipment_id,
-    status: result.status,
+  const orderData =
+    result?.response?.data ||
+    result?.data ||
+    result;
+
+  const shiprocketOrderId =
+    orderData?.order_id ??
+    result?.order_id ??
+    null;
+
+  const shipmentId =
+    orderData?.shipment_id ??
+    result?.shipment_id ??
+    null;
+
+  const status =
+    orderData?.status ??
+    result?.status ??
+    "NEW";
+
+  const statusCode =
+    orderData?.status_code ??
+    result?.status_code ??
+    null;
+
+  console.log("Shiprocket create response keys:", result ? Object.keys(result) : []);
+  console.log("Shiprocket create normalized:", {
+    orderId: shiprocketOrderId,
+    shipmentId,
+    status,
+    statusCode,
   });
 
-  return result;
+  log.info("Shiprocket order created successfully", {
+    internalOrderId: order._id,
+    shiprocketOrderId,
+    shipmentId,
+    status,
+  });
+
+  return {
+    ...result,
+    order_id: shiprocketOrderId,
+    shipment_id: shipmentId,
+    status,
+    status_code: statusCode,
+    data: orderData,
+  };
 };
 
 /**
