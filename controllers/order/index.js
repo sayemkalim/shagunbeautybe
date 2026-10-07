@@ -5587,22 +5587,24 @@ const checkShiprocketServiceability = asyncHandler(async (req, res) => {
     declared_value,
     order_value,
     order_sub_total,
+    is_return,
   } = {
     ...req.query,
     ...req.body,
   };
 
   let declaredValue = declared_value || order_value || order_sub_total;
+  let isReturn = is_return !== undefined ? (is_return === "1" || is_return === 1 || is_return === "true" || is_return === true ? 1 : 0) : 0;
 
   if (id && mongoose.Types.ObjectId.isValid(id)) {
     const order = await Order.findById(id);
     if (order) {
       delivery_postcode = delivery_postcode || order.address?.pincode;
-      if (cod === undefined) {
-        cod = String(order.paymentMode || "").toUpperCase() === "COD";
+      if (cod === undefined || cod === null || cod === "") {
+        cod = String(order.paymentMode || "").toUpperCase() === "COD" ? 1 : 0;
       }
 
-      if (declaredValue === undefined || declaredValue === null) {
+      if (declaredValue === undefined || declaredValue === null || declaredValue === "") {
         declaredValue = order.finalTotalAmount
           ? parseFloat(order.finalTotalAmount.toString())
           : order.discountedTotalAmount
@@ -5670,16 +5672,31 @@ const checkShiprocketServiceability = asyncHandler(async (req, res) => {
       );
   }
 
+  const isCodResolved = cod === "1" || cod === 1 || cod === "true" || cod === true;
+
+  console.log("SERVICEABILITY INPUT:", {
+    pickup_postcode: String(pickup_postcode).trim(),
+    delivery_postcode: String(delivery_postcode).trim(),
+    weight: Number(weight) || undefined,
+    length: Number(length) || undefined,
+    breadth: Number(breadth) || undefined,
+    height: Number(height) || undefined,
+    cod: isCodResolved ? 1 : 0,
+    declared_value: Number(declaredValue) || 0,
+    is_return: isReturn,
+  });
+
   try {
     const result = await ShiprocketService.checkServiceability({
       pickupPostcode: pickup_postcode,
       deliveryPostcode: delivery_postcode,
       weight,
-      cod: cod === "1" || cod === "true" || cod === true,
+      cod: isCodResolved,
       declaredValue,
       length,
       breadth,
       height,
+      isReturn,
     });
 
     return res.status(200).json(
