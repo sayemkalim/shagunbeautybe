@@ -363,6 +363,49 @@ const createOrder = async (order, options = {}) => {
     body: JSON.stringify(payload),
   });
 
+  console.log("SHIPROCKET CREATE DATA TYPE DEBUG", {
+    rootType: typeof result,
+    dataType: typeof result?.data,
+    nestedDataType: typeof result?.data?.data,
+    rootIsArray: Array.isArray(result),
+    dataIsArray: Array.isArray(result?.data),
+    nestedDataIsArray: Array.isArray(result?.data?.data),
+    nestedDataLength: Array.isArray(result?.data?.data)
+      ? result.data.data.length
+      : null,
+  });
+
+  console.log("SHIPROCKET NESTED DATA SAFE DEBUG", {
+    firstItem:
+      Array.isArray(result?.data?.data)
+        ? {
+            type: typeof result.data.data[0],
+            keys:
+              result.data.data[0] &&
+              typeof result.data.data[0] === "object"
+                ? Object.keys(result.data.data[0])
+                : [],
+            order_id: result.data.data[0]?.order_id ?? null,
+            shipment_id: result.data.data[0]?.shipment_id ?? null,
+            orderId: result.data.data[0]?.orderId ?? null,
+            shipmentId: result.data.data[0]?.shipmentId ?? null,
+            status: result.data.data[0]?.status ?? null,
+            status_code: result.data.data[0]?.status_code ?? null,
+          }
+        : null,
+  });
+
+  if (Array.isArray(result?.data?.data)) {
+    console.log("SHIPROCKET NESTED ARRAY DEBUG", {
+      length: result.data.data.length,
+      itemTypes: result.data.data.map((item) => typeof item),
+      rawItem0:
+        typeof result.data.data[0] === "object"
+          ? JSON.stringify(result.data.data[0])
+          : String(result.data.data[0]),
+    });
+  }
+
   const orderData =
     result?.response?.data?.data ||
     result?.response?.data ||
