@@ -388,12 +388,46 @@ const createOrder = async (order, options = {}) => {
     result?.status_code ??
     null;
 
-  console.log("Shiprocket create response keys:", result ? Object.keys(result) : []);
-  console.log("Shiprocket create normalized:", {
-    orderId: shiprocketOrderId,
-    shipmentId,
-    status,
-    statusCode,
+  console.log("SHIPROCKET CREATE DEBUG", {
+    isArray: Array.isArray(result),
+    rootKeys: result ? Object.keys(result) : [],
+    dataKeys:
+      result?.data && typeof result.data === "object"
+        ? Object.keys(result.data)
+        : [],
+    responseKeys:
+      result?.response && typeof result.response === "object"
+        ? Object.keys(result.response)
+        : [],
+    responseDataKeys:
+      result?.response?.data &&
+      typeof result.response.data === "object"
+        ? Object.keys(result.response.data)
+        : [],
+  });
+
+  console.log("SHIPROCKET CREATE IDS DEBUG", {
+    rootOrderId: result?.order_id ?? null,
+    rootShipmentId: result?.shipment_id ?? null,
+
+    dataOrderId: result?.data?.order_id ?? null,
+    dataShipmentId: result?.data?.shipment_id ?? null,
+
+    responseOrderId: result?.response?.order_id ?? null,
+    responseShipmentId: result?.response?.shipment_id ?? null,
+
+    responseDataOrderId: result?.response?.data?.order_id ?? null,
+    responseDataShipmentId: result?.response?.data?.shipment_id ?? null,
+  });
+
+  console.log("SHIPROCKET RAW DATA DEBUG", {
+    keys: result ? Object.keys(result) : [],
+    order_id: result?.order_id ?? null,
+    shipment_id: result?.shipment_id ?? null,
+    nestedDataKeys:
+      result?.data && typeof result.data === "object"
+        ? Object.keys(result.data)
+        : [],
   });
 
   log.info("Shiprocket order created successfully", {

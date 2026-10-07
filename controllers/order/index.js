@@ -111,7 +111,22 @@ const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocat
     order.shipping.status = status || "NEW";
     order.shipping.statusCode = statusCode != null ? Number(statusCode) : null;
     order.shipping.error = null;
-    await order.save();
+    console.log("SHIPROCKET DB UPDATE DEBUG", {
+      orderId: order._id,
+      shiprocketOrderId: order.shipping?.shiprocketOrderId,
+      shipmentId: order.shipping?.shipmentId,
+      status: order.shipping?.status,
+      statusCode: order.shipping?.statusCode,
+    });
+
+    const savedOrder = await order.save();
+
+    console.log("SHIPROCKET DB SAVED DEBUG", {
+      shiprocketOrderId: savedOrder.shipping?.shiprocketOrderId,
+      shipmentId: savedOrder.shipping?.shipmentId,
+      status: savedOrder.shipping?.status,
+      statusCode: savedOrder.shipping?.statusCode,
+    });
     return {
       success: true,
       data: result,
@@ -5073,6 +5088,14 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
   });
 
   const updatedOrder = (await Order.findById(id).populate("user")) || order;
+
+  console.log("SHIPROCKET CONTROLLER RETURNING ORDER DEBUG", {
+    orderId: updatedOrder._id,
+    shiprocketOrderId: updatedOrder.shipping?.shiprocketOrderId,
+    shipmentId: updatedOrder.shipping?.shipmentId,
+    status: updatedOrder.shipping?.status,
+    statusCode: updatedOrder.shipping?.statusCode,
+  });
 
   if (!syncResult.success) {
     return res.status(400).json(
