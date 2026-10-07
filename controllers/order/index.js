@@ -2939,6 +2939,28 @@ const updateOrder = asyncHandler(async (req, res) => {
     if (updateData.notes) {
       order.notes = updateData.notes;
     }
+    if (updateData.package || updateData.shippingDetails?.package) {
+      const pkg = updateData.package || updateData.shippingDetails?.package;
+      if (!order.shippingDetails) {
+        order.shippingDetails = {};
+      }
+      if (!order.shippingDetails.package) {
+        order.shippingDetails.package = {};
+      }
+      order.shippingDetails.isManual = true;
+      if (pkg.weight !== undefined && !isNaN(parseFloat(pkg.weight))) {
+        order.shippingDetails.package.weight = parseFloat(pkg.weight);
+      }
+      if (pkg.length !== undefined && !isNaN(parseFloat(pkg.length))) {
+        order.shippingDetails.package.length = parseFloat(pkg.length);
+      }
+      if (pkg.breadth !== undefined && !isNaN(parseFloat(pkg.breadth))) {
+        order.shippingDetails.package.breadth = parseFloat(pkg.breadth);
+      }
+      if (pkg.height !== undefined && !isNaN(parseFloat(pkg.height))) {
+        order.shippingDetails.package.height = parseFloat(pkg.height);
+      }
+    }
     if (updateData.utr_number !== undefined) {
       order.utr_number = updateData.utr_number;
     }
@@ -5554,7 +5576,10 @@ const cancelShiprocketOrder = asyncHandler(async (req, res) => {
  */
 const checkShiprocketServiceability = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  let { pickup_postcode, delivery_postcode, weight, cod } = req.query;
+  let { pickup_postcode, delivery_postcode, weight, cod, length, breadth, height } = {
+    ...req.query,
+    ...req.body,
+  };
 
   if (id && mongoose.Types.ObjectId.isValid(id)) {
     const order = await Order.findById(id);
@@ -5562,6 +5587,44 @@ const checkShiprocketServiceability = asyncHandler(async (req, res) => {
       delivery_postcode = delivery_postcode || order.address?.pincode;
       if (cod === undefined) {
         cod = order.paymentMode === "COD";
+      }
+
+      // Persist package dimensions if provided
+      const parsedWeight = parseFloat(weight);
+      const parsedLength = parseFloat(length);
+      const parsedBreadth = parseFloat(breadth);
+      const parsedHeight = parseFloat(height);
+
+      let hasPackageUpdates = false;
+      if (!order.shippingDetails) {
+        order.shippingDetails = {};
+      }
+      if (!order.shippingDetails.package) {
+        order.shippingDetails.package = {};
+      }
+
+      if (!isNaN(parsedWeight) && parsedWeight > 0) {
+        order.shippingDetails.package.weight = parsedWeight;
+        hasPackageUpdates = true;
+      }
+      if (!isNaN(parsedLength) && parsedLength > 0) {
+        order.shippingDetails.package.length = parsedLength;
+        hasPackageUpdates = true;
+      }
+      if (!isNaN(parsedBreadth) && parsedBreadth > 0) {
+        order.shippingDetails.package.breadth = parsedBreadth;
+        hasPackageUpdates = true;
+      }
+      if (!isNaN(parsedHeight) && parsedHeight > 0) {
+        order.shippingDetails.package.height = parsedHeight;
+        hasPackageUpdates = true;
+      }
+
+      if (hasPackageUpdates) {
+        order.shippingDetails.isManual = true;
+        await order.save();
+      } else if (!weight && order.shippingDetails?.package?.weight) {
+        weight = order.shippingDetails.package.weight;
       }
     }
   }
