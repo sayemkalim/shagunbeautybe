@@ -54,15 +54,6 @@ const getShiprocketToken = async (forceRefresh = false) => {
 
     const data = await response.json();
 
-    console.log("SHIPROCKET AUTH RESPONSE DEBUG", {
-      status: response?.status ?? null,
-      hasToken: Boolean(data?.token),
-      dataKeys:
-        data && typeof data === "object"
-          ? Object.keys(data)
-          : [],
-    });
-
     if (!response.ok || !data.token) {
       const errMsg = data.message || (data.errors ? JSON.stringify(data.errors) : `HTTP ${response.status}`);
       throw new Error(`Shiprocket login failed: ${errMsg}`);
@@ -99,32 +90,6 @@ const request = async (endpoint, options = {}, isRetry = false) => {
     headers,
   };
 
-  if (endpoint.includes("create") || options.method === "POST") {
-    console.log("SHIPROCKET AUTH DEBUG", {
-      hasAuthorization: Boolean(headers.Authorization),
-      authorizationPrefix:
-        typeof headers.Authorization === "string"
-          ? headers.Authorization.slice(0, 7)
-          : null,
-      contentType: headers["Content-Type"] || headers["content-type"] || null,
-    });
-
-    let safeDataKeys = [];
-    if (options.body) {
-      try {
-        const parsed = JSON.parse(options.body);
-        safeDataKeys = Object.keys(parsed);
-      } catch (e) {}
-    }
-    console.log("SHIPROCKET CREATE REQUEST DEBUG", {
-      method: options.method || "GET",
-      url,
-      baseURL: config.baseUrl,
-      hasData: Boolean(options.body),
-      dataKeys: safeDataKeys,
-    });
-  }
-
   let response;
   try {
     response = await fetch(url, fetchOptions);
@@ -147,21 +112,6 @@ const request = async (endpoint, options = {}, isRetry = false) => {
       throw new Error(`Shiprocket request failed with status ${response.status}`);
     }
     throw new Error(`Failed to parse Shiprocket response for ${endpoint}`);
-  }
-
-  if (endpoint.includes("create") || options.method === "POST") {
-    console.log("SHIPROCKET CREATE RESPONSE META DEBUG", {
-      status: response?.status ?? null,
-      statusText: response?.statusText ?? null,
-      redirected: response?.redirected ?? false,
-      finalUrl: response?.url ?? url,
-      responseDataType: typeof data,
-      responseDataIsArray: Array.isArray(data),
-      responseDataKeys:
-        data && typeof data === "object"
-          ? Object.keys(data)
-          : [],
-    });
   }
 
   if (!response.ok) {
@@ -413,49 +363,6 @@ const createOrder = async (order, options = {}) => {
     body: JSON.stringify(payload),
   });
 
-  console.log("SHIPROCKET CREATE DATA TYPE DEBUG", {
-    rootType: typeof result,
-    dataType: typeof result?.data,
-    nestedDataType: typeof result?.data?.data,
-    rootIsArray: Array.isArray(result),
-    dataIsArray: Array.isArray(result?.data),
-    nestedDataIsArray: Array.isArray(result?.data?.data),
-    nestedDataLength: Array.isArray(result?.data?.data)
-      ? result.data.data.length
-      : null,
-  });
-
-  console.log("SHIPROCKET NESTED DATA SAFE DEBUG", {
-    firstItem:
-      Array.isArray(result?.data?.data)
-        ? {
-            type: typeof result.data.data[0],
-            keys:
-              result.data.data[0] &&
-              typeof result.data.data[0] === "object"
-                ? Object.keys(result.data.data[0])
-                : [],
-            order_id: result.data.data[0]?.order_id ?? null,
-            shipment_id: result.data.data[0]?.shipment_id ?? null,
-            orderId: result.data.data[0]?.orderId ?? null,
-            shipmentId: result.data.data[0]?.shipmentId ?? null,
-            status: result.data.data[0]?.status ?? null,
-            status_code: result.data.data[0]?.status_code ?? null,
-          }
-        : null,
-  });
-
-  if (Array.isArray(result?.data?.data)) {
-    console.log("SHIPROCKET NESTED ARRAY DEBUG", {
-      length: result.data.data.length,
-      itemTypes: result.data.data.map((item) => typeof item),
-      rawItem0:
-        typeof result.data.data[0] === "object"
-          ? JSON.stringify(result.data.data[0])
-          : String(result.data.data[0]),
-    });
-  }
-
   const orderData =
     result?.response?.data?.data ||
     result?.response?.data ||
@@ -484,59 +391,6 @@ const createOrder = async (order, options = {}) => {
     result?.status_code ??
     result?.statusCode ??
     null;
-
-  console.log("SHIPROCKET CREATE DEBUG", {
-    isArray: Array.isArray(result),
-    rootKeys: result ? Object.keys(result) : [],
-    dataKeys:
-      result?.data && typeof result.data === "object"
-        ? Object.keys(result.data)
-        : [],
-    responseKeys:
-      result?.response && typeof result.response === "object"
-        ? Object.keys(result.response)
-        : [],
-    responseDataKeys:
-      result?.response?.data &&
-      typeof result.response.data === "object"
-        ? Object.keys(result.response.data)
-        : [],
-  });
-
-  console.log("SHIPROCKET CREATE IDS DEBUG", {
-    rootOrderId: result?.order_id ?? null,
-    rootShipmentId: result?.shipment_id ?? null,
-
-    dataOrderId: result?.data?.order_id ?? null,
-    dataShipmentId: result?.data?.shipment_id ?? null,
-
-    responseOrderId: result?.response?.order_id ?? null,
-    responseShipmentId: result?.response?.shipment_id ?? null,
-
-    responseDataOrderId: result?.response?.data?.order_id ?? null,
-    responseDataShipmentId: result?.response?.data?.shipment_id ?? null,
-  });
-
-  console.log("SHIPROCKET RAW DATA DEBUG", {
-    keys: result ? Object.keys(result) : [],
-    order_id: result?.order_id ?? null,
-    shipment_id: result?.shipment_id ?? null,
-    nestedDataKeys:
-      result?.data && typeof result.data === "object"
-        ? Object.keys(result.data)
-        : [],
-  });
-
-  console.log("SHIPROCKET NORMALIZED PAYLOAD DEBUG", {
-    orderDataKeys:
-      orderData && typeof orderData === "object"
-        ? Object.keys(orderData)
-        : [],
-    orderId: shiprocketOrderId,
-    shipmentId,
-    status,
-    statusCode,
-  });
 
   log.info("Shiprocket order created successfully", {
     internalOrderId: order._id,

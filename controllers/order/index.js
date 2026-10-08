@@ -29,6 +29,7 @@ const Inventory = require("../../models/inventoryModel");
 const razorpay = require("../../config/razorpay");
 const InventoryService = require("../../services/inventory/index.js");
 const CouponService = require("../../services/coupon/index.js");
+const CodSettingsService = require("../../services/cod_settings/index.js");
 const { getAvailableStock } = require("../../utils/inventory/getAvailableStock.js");
 const {
   getProductQuantityOptions,
@@ -117,22 +118,7 @@ const syncOrderToShiprocket = async (order, { packageDetails = null, pickupLocat
     order.shipping.status = status || "NEW";
     order.shipping.statusCode = statusCode != null ? Number(statusCode) : null;
     order.shipping.error = null;
-    console.log("SHIPROCKET DB UPDATE DEBUG", {
-      orderId: order._id,
-      shiprocketOrderId: order.shipping?.shiprocketOrderId,
-      shipmentId: order.shipping?.shipmentId,
-      status: order.shipping?.status,
-      statusCode: order.shipping?.statusCode,
-    });
-
-    const savedOrder = await order.save();
-
-    console.log("SHIPROCKET DB SAVED DEBUG", {
-      shiprocketOrderId: savedOrder.shipping?.shiprocketOrderId,
-      shipmentId: savedOrder.shipping?.shipmentId,
-      status: savedOrder.shipping?.status,
-      statusCode: savedOrder.shipping?.statusCode,
-    });
+    await order.save();
     return {
       success: true,
       data: result,
@@ -753,6 +739,27 @@ const createGuestOrder = asyncHandler(async (req, res) => {
   // Calculate final total amount (discounted total + shipping)
   const finalTotalAmount = discountedTotalAmount + shippingCost;
 
+  // Validate COD rules
+  if (paymentMode === "COD") {
+    const codCheck = await CodSettingsService.checkEligibility({
+      pincode: addressSnapshot.pincode,
+      amount: finalTotalAmount,
+    });
+
+    if (!codCheck.eligible) {
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            codCheck.reason || "Cash on Delivery is not available for this order.",
+            false,
+          ),
+        );
+    }
+  }
+
   const order = new Order({
     user: null,
     isGuestOrder: true,
@@ -1267,6 +1274,27 @@ const createOrder = asyncHandler(async (req, res) => {
     return res
       .status(400)
       .json(new ApiResponse(400, null, err.message, false));
+  }
+
+  // Validate COD rules
+  if (paymentMode === "COD") {
+    const codCheck = await CodSettingsService.checkEligibility({
+      pincode: summary.addressSnapshot ? summary.addressSnapshot.pincode : null,
+      amount: summary.finalTotalAmount,
+    });
+
+    if (!codCheck.eligible) {
+      return res
+        .status(400)
+        .json(
+          new ApiResponse(
+            400,
+            null,
+            codCheck.reason || "Cash on Delivery is not available for this order.",
+            false,
+          ),
+        );
+    }
   }
 
   const order = new Order({
@@ -5094,14 +5122,6 @@ const createShiprocketOrder = asyncHandler(async (req, res) => {
   });
 
   const updatedOrder = (await Order.findById(id).populate("user")) || order;
-
-  console.log("SHIPROCKET CONTROLLER RETURNING ORDER DEBUG", {
-    orderId: updatedOrder._id,
-    shiprocketOrderId: updatedOrder.shipping?.shiprocketOrderId,
-    shipmentId: updatedOrder.shipping?.shipmentId,
-    status: updatedOrder.shipping?.status,
-    statusCode: updatedOrder.shipping?.statusCode,
-  });
 
   if (!syncResult.success) {
     return res.status(400).json(
