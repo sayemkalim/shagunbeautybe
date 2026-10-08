@@ -69,7 +69,8 @@ class CodSettingsService {
     if (!settings.is_cod_enabled) {
       return {
         eligible: false,
-        reason: "Cash on Delivery is currently disabled.",
+        reason: "Cash on Delivery is currently unavailable.",
+        cod_charge: 0,
         settings,
       };
     }
@@ -80,7 +81,8 @@ class CodSettingsService {
     if (orderAmount < minAmount) {
       return {
         eligible: false,
-        reason: `COD is only applicable on orders of ₹${minAmount} and above.`,
+        reason: `COD is available on orders of ₹${minAmount} and above.`,
+        cod_charge: 0,
         settings,
       };
     }
@@ -88,7 +90,8 @@ class CodSettingsService {
     if (maxAmount > 0 && orderAmount > maxAmount) {
       return {
         eligible: false,
-        reason: `COD is only applicable for orders up to ₹${maxAmount}. For higher amounts, please choose online payment.`,
+        reason: `COD is only available on orders up to ₹${maxAmount}. Please choose Online Payment.`,
+        cod_charge: 0,
         settings,
       };
     }
@@ -101,15 +104,19 @@ class CodSettingsService {
       if (!isPincodeAllowed) {
         return {
           eligible: false,
-          reason: `Cash on Delivery is not available for pincode ${cleanPincode}. Available in selected areas (e.g. 206001).`,
+          reason: `Cash on Delivery is not available for pincode ${cleanPincode}.`,
+          cod_charge: 0,
           settings,
         };
       }
     }
 
+    const codCharge = Number(settings.cod_extra_charge) || 0;
+
     return {
       eligible: true,
       reason: "COD is available for this order.",
+      cod_charge: codCharge,
       settings,
     };
   }

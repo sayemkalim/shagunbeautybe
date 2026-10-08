@@ -1,34 +1,12 @@
 const DeliveryZone = require("../../models/deliveryZoneModel");
+const DeliverySettingsService = require("../../services/delivery_settings/index.js");
 
-// Orders below this amount (pre-shipping) incur a flat shipping charge.
+// Fallback constants
 const FREE_SHIPPING_THRESHOLD = 2000;
 const BELOW_THRESHOLD_SHIPPING_CHARGE = 50;
 
 /**
- * Calculate shipping cost based on order amount: orders under ₹2000 incur a
- * flat ₹50 shipping charge, orders of ₹2000 or more ship free.
- * Returns a snapshot of shipping details to be stored with the order.
- * @param {Number} orderAmount - Order amount (pre-shipping) in rupees
- * @returns {Object} - { shippingCost, shippingDetails }
- */
-function calculateShippingCost(orderAmount) {
-  const amount = Number(orderAmount) || 0;
-  const shippingCost =
-    amount < FREE_SHIPPING_THRESHOLD ? BELOW_THRESHOLD_SHIPPING_CHARGE : 0;
-
-  return {
-    shippingCost,
-    shippingDetails: {
-      pricingType: "threshold",
-      threshold: FREE_SHIPPING_THRESHOLD,
-      isManual: false,
-      calculatedAt: new Date(),
-    },
-  };
-}
-
-/**
- * Calculate shipping cost based on a specific delivery zone ID
+ * Calculate shipping cost based on specific delivery zone ID
  * @param {String} deliveryZoneId - Delivery zone ID
  * @param {Number} totalWeightGrams - Total order weight in grams
  * @returns {Object} - { shippingCost, shippingDetails }
@@ -65,7 +43,7 @@ async function calculateShippingByZone(deliveryZoneId, totalWeightGrams = 0) {
         ) {
           const weightUnits = Math.ceil(
             totalWeightGrams / deliveryZone.weight_unit_grams
-          );
+          ) || 1;
           shippingCost = weightUnits * deliveryZone.price;
         }
         break;
@@ -78,7 +56,7 @@ async function calculateShippingByZone(deliveryZoneId, totalWeightGrams = 0) {
             totalWeightGrams - deliveryZone.min_weight_grams;
           const excessWeightUnits = Math.ceil(
             excessWeight / deliveryZone.weight_unit_grams
-          );
+          ) || 1;
           shippingCost += excessWeightUnits * deliveryZone.price;
         }
         break;
@@ -106,5 +84,65 @@ async function calculateShippingByZone(deliveryZoneId, totalWeightGrams = 0) {
   }
 }
 
-module.exports = { calculateShippingCost, calculateShippingByZone };
+/**
+ * Calculate dynamic shipping cost based on Min-Max amount range configured in DeliverySettings,
+ * or DeliveryZone matching pincode.
+ * @param {Number} orderAmount - Order amount in rupees
+ * @param {String} [pincode] - Delivery address pincode
+ * @param {Number} [totalWeightGrams=0] - Total order weight in grams
+ * @returns {Promise<Object>} - { shippingCost, shippingDetails }
+ */
+async function calculateShippingCost(orderAmount, pincode = null, totalWeightGrams = 0) {
+  const amount = Number(orderAmount) || 0;
 
+  try {
+    // 1. Check if a specific DeliveryZone matches this pincode
+    if (pincode) {
+      const cleanPincode = String(pincode).trim();
+      const zone = await DeliveryZone.findOne({
+        pincodes: cleanPincode,
+        is_active: true,
+      });
+
+      if (zone) {
+        return await calculateShippingByZone(zone._id, totalWeightGrams);
+      }
+    }
+
+    // 2. Apply Custom Min-Max Range Delivery Settings (e.g. Rs 1 to 2000 -> Rs 50, >2000 -> Free)
+    const deliveryRule = await DeliverySettingsService.calculateDeliveryFee(amount);
+    if (deliveryRule && deliveryRule.settings) {
+      return {
+        shippingCost: deliveryRule.delivery_fee,
+        shippingDetails: {
+          pricingType: "amount_range",
+          min_order_amount: deliveryRule.settings.min_order_amount,
+          max_order_amount: deliveryRule.settings.max_order_amount,
+          free_delivery_above: deliveryRule.settings.free_delivery_above,
+          delivery_fee: deliveryRule.delivery_fee,
+          is_free: deliveryRule.is_free,
+          isManual: false,
+          calculatedAt: new Date(),
+        },
+      };
+    }
+  } catch (err) {
+    console.warn("Dynamic delivery calculation warning:", err.message);
+  }
+
+  // 3. Fallback standard threshold
+  const shippingCost =
+    amount < FREE_SHIPPING_THRESHOLD ? BELOW_THRESHOLD_SHIPPING_CHARGE : 0;
+
+  return {
+    shippingCost,
+    shippingDetails: {
+      pricingType: "threshold",
+      threshold: FREE_SHIPPING_THRESHOLD,
+      isManual: false,
+      calculatedAt: new Date(),
+    },
+  };
+}
+
+module.exports = { calculateShippingCost, calculateShippingByZone };

@@ -241,6 +241,10 @@ const OrderSchema = new mongoose.Schema({
       default: null
     }
   },
+  cod_charge: {
+    type: mongoose.Schema.Types.Decimal128,
+    default: 0
+  },
   finalTotalAmount: {
     type: mongoose.Schema.Types.Decimal128,
     required: true
@@ -478,6 +482,9 @@ OrderSchema.set("toJSON", {
     if (ret.couponDiscountAmount) {
       ret.couponDiscountAmount = parseFloat(ret.couponDiscountAmount.toString());
     }
+    if (ret.cod_charge !== undefined && ret.cod_charge !== null) {
+      ret.cod_charge = parseFloat(ret.cod_charge.toString());
+    }
     if (ret.finalTotalAmount) {
       ret.finalTotalAmount = parseFloat(ret.finalTotalAmount.toString());
     }
@@ -551,6 +558,9 @@ OrderSchema.set("toObject", {
     }
     if (ret.couponDiscountAmount) {
       ret.couponDiscountAmount = parseFloat(ret.couponDiscountAmount.toString());
+    }
+    if (ret.cod_charge !== undefined && ret.cod_charge !== null) {
+      ret.cod_charge = parseFloat(ret.cod_charge.toString());
     }
     if (ret.finalTotalAmount) {
       ret.finalTotalAmount = parseFloat(ret.finalTotalAmount.toString());

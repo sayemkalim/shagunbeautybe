@@ -731,19 +731,21 @@ const createGuestOrder = asyncHandler(async (req, res) => {
     addressType: address.addressType || "home",
   };
 
-  // Orders under ₹2000 incur a flat ₹50 shipping charge
+  // Dynamic shipping cost by zone and pincode
   const { shippingCost, shippingDetails } = await calculateShippingCost(
     discountedTotalAmount,
+    addressSnapshot?.pincode,
+    totalWeightGrams,
   );
 
-  // Calculate final total amount (discounted total + shipping)
-  const finalTotalAmount = discountedTotalAmount + shippingCost;
+  // Calculate base total amount (discounted total + shipping)
+  let cod_charge = 0;
 
   // Validate COD rules
   if (paymentMode === "COD") {
     const codCheck = await CodSettingsService.checkEligibility({
       pincode: addressSnapshot.pincode,
-      amount: finalTotalAmount,
+      amount: discountedTotalAmount + shippingCost,
     });
 
     if (!codCheck.eligible) {
@@ -758,7 +760,12 @@ const createGuestOrder = asyncHandler(async (req, res) => {
           ),
         );
     }
+
+    cod_charge = codCheck.cod_charge || 0;
   }
+
+  // Calculate final total amount (discounted total + shipping + cod_charge)
+  const finalTotalAmount = discountedTotalAmount + shippingCost + cod_charge;
 
   const order = new Order({
     user: null,
@@ -774,6 +781,7 @@ const createGuestOrder = asyncHandler(async (req, res) => {
     discountedTotalAmount,
     shippingCost,
     shippingDetails,
+    cod_charge,
     finalTotalAmount,
     paymentMode,
     utr_number: utr_number || null,
@@ -1215,6 +1223,8 @@ const prepareCartOrderData = async ({
 
   const { shippingCost, shippingDetails } = await calculateShippingCost(
     discountedTotalAmount,
+    addressSnapshot?.pincode,
+    totalWeightGrams,
   );
 
   const finalTotalAmount =
@@ -1276,7 +1286,8 @@ const createOrder = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, err.message, false));
   }
 
-  // Validate COD rules
+  // Validate COD rules and calculate COD charge
+  let cod_charge = 0;
   if (paymentMode === "COD") {
     const codCheck = await CodSettingsService.checkEligibility({
       pincode: summary.addressSnapshot ? summary.addressSnapshot.pincode : null,
@@ -1295,7 +1306,11 @@ const createOrder = asyncHandler(async (req, res) => {
           ),
         );
     }
+
+    cod_charge = codCheck.cod_charge || 0;
   }
+
+  const finalPayableAmount = summary.finalTotalAmount + cod_charge;
 
   const order = new Order({
     user: userId,
@@ -1308,7 +1323,8 @@ const createOrder = asyncHandler(async (req, res) => {
     coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
     couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
     couponDiscountAmount: summary.couponDiscountAmount,
-    finalTotalAmount: summary.finalTotalAmount,
+    cod_charge,
+    finalTotalAmount: finalPayableAmount,
     paymentMode,
     utr_number: utr_number || null,
     status: "pending",

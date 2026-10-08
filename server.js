@@ -35,6 +35,7 @@ const secondBannerRoutes = require("./routes/secondBanner/index.js");
 const cardBannerRoutes = require("./routes/cardBanner/index.js");
 const marqueeRoutes = require("./routes/marquee/index.js");
 const codSettingsRoutes = require("./routes/cod_settings/index.js");
+const deliverySettingsRoutes = require("./routes/delivery_settings/index.js");
 
 // Connect DB
 connectDB();
@@ -91,6 +92,8 @@ app.use("/api/card_banner", cardBannerRoutes);
 app.use("/api/marquee", marqueeRoutes);
 app.use("/api/settings/cod", codSettingsRoutes);
 app.use("/api/cod-settings", codSettingsRoutes);
+app.use("/api/settings/delivery", deliverySettingsRoutes);
+app.use("/api/delivery-settings", deliverySettingsRoutes);
 
 app.use("/api-doc", swaggerUI.serve, swaggerUI.setup(swaggerSpec));
 
