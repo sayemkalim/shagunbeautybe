@@ -85,42 +85,32 @@ async function calculateShippingByZone(deliveryZoneId, totalWeightGrams = 0) {
 }
 
 /**
- * Calculate dynamic shipping cost based on Min-Max amount range configured in DeliverySettings,
- * or DeliveryZone matching pincode.
+ * Calculate dynamic shipping cost based on global DeliverySettings configured in admin.
+ * Delivery zones (DeliveryZone) do NOT override or affect the delivery fee.
+ *
  * @param {Number} orderAmount - Order amount in rupees
- * @param {String} [pincode] - Delivery address pincode
- * @param {Number} [totalWeightGrams=0] - Total order weight in grams
+ * @param {String} [pincode] - Delivery address pincode (kept for signature compatibility)
+ * @param {Number} [totalWeightGrams=0] - Total order weight in grams (kept for signature compatibility)
  * @returns {Promise<Object>} - { shippingCost, shippingDetails }
  */
 async function calculateShippingCost(orderAmount, pincode = null, totalWeightGrams = 0) {
   const amount = Number(orderAmount) || 0;
 
   try {
-    // 1. Check if a specific DeliveryZone matches this pincode
-    if (pincode) {
-      const cleanPincode = String(pincode).trim();
-      const zone = await DeliveryZone.findOne({
-        pincodes: cleanPincode,
-        is_active: true,
-      });
-
-      if (zone) {
-        return await calculateShippingByZone(zone._id, totalWeightGrams);
-      }
-    }
-
-    // 2. Apply Custom Min-Max Range Delivery Settings (e.g. Rs 1 to 2000 -> Rs 50, >2000 -> Free)
+    // Apply Global Delivery Settings (e.g. Free delivery above threshold, otherwise configured delivery fee)
     const deliveryRule = await DeliverySettingsService.calculateDeliveryFee(amount);
-    if (deliveryRule && deliveryRule.settings) {
+    if (deliveryRule && deliveryRule.delivery_fee !== undefined) {
+      const fee = Math.max(0, Number(deliveryRule.delivery_fee) || 0);
       return {
-        shippingCost: deliveryRule.delivery_fee,
+        shippingCost: fee,
         shippingDetails: {
           pricingType: "amount_range",
-          min_order_amount: deliveryRule.settings.min_order_amount,
-          max_order_amount: deliveryRule.settings.max_order_amount,
-          free_delivery_above: deliveryRule.settings.free_delivery_above,
-          delivery_fee: deliveryRule.delivery_fee,
-          is_free: deliveryRule.is_free,
+          min_order_amount: deliveryRule.settings?.min_order_amount,
+          max_order_amount: deliveryRule.settings?.max_order_amount,
+          free_delivery_above: deliveryRule.settings?.free_delivery_above,
+          delivery_fee: fee,
+          is_free: !!deliveryRule.is_free,
+          reason: deliveryRule.reason,
           isManual: false,
           calculatedAt: new Date(),
         },
@@ -130,7 +120,7 @@ async function calculateShippingCost(orderAmount, pincode = null, totalWeightGra
     console.warn("Dynamic delivery calculation warning:", err.message);
   }
 
-  // 3. Fallback standard threshold
+  // Fallback standard threshold
   const shippingCost =
     amount < FREE_SHIPPING_THRESHOLD ? BELOW_THRESHOLD_SHIPPING_CHARGE : 0;
 
