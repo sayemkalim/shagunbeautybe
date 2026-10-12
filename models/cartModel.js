@@ -63,20 +63,22 @@ const CartSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Ensure fast lookups and at most one cart per user
+CartSchema.index({ user: 1 }, { unique: true });
+
 CartSchema.pre("save", function (next) {
-  // Ensure all items have proper totals
-  this.items.forEach((item) => {
-    // Only recalculate total if we have both quantity and price, and price is not 0
+  let totalPrice = 0;
+  for (let i = 0; i < this.items.length; i++) {
+    const item = this.items[i];
     if (item.quantity && item.price && item.price > 0) {
       item.total = item.quantity * item.price;
     }
-    // Update timestamps
-    item.updatedAt = new Date();
-  });
+    totalPrice += item.total || 0;
+  }
 
   // Calculate total price
-  this.total_price = this.items.reduce((sum, item) => sum + (item.total || 0), 0);
-  
+  this.total_price = totalPrice;
+
   // Update cart active status
   this.is_active = this.items.length > 0;
 
