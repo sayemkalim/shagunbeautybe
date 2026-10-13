@@ -1020,14 +1020,18 @@ const prepareCartOrderData = async ({
     throw err;
   }
 
-  const cart = await Cart.findOne({ _id: cartId, user: userId });
+  // Concurrently fetch Cart and Address in parallel
+  const [cart, address] = await Promise.all([
+    Cart.findOne({ _id: cartId, user: userId }),
+    Address.findOne({ _id: addressId, user: userId }),
+  ]);
+
   if (!cart || cart.items.length === 0) {
     const err = new Error("Cart not found or empty");
     err.statusCode = 400;
     throw err;
   }
 
-  const address = await Address.findOne({ _id: addressId, user: userId });
   if (!address) {
     const err = new Error("Address not found");
     err.statusCode = 400;
@@ -1039,6 +1043,146 @@ const prepareCartOrderData = async ({
   const selectedSet = hasSelectedFilter
     ? new Set(selectedItemIds.map(String))
     : null;
+
+  // 1. Gather all product & bundle IDs upfront from cart items
+  const productIds = new Set();
+  const bundleIds = new Set();
+
+  for (const cartItem of cart.items) {
+    const pIdStr = cartItem.product ? cartItem.product.toString() : "";
+    const bIdStr = cartItem.bundle ? cartItem.bundle.toString() : "";
+    const vSku = cartItem.variant_sku || "base";
+    const itemIdStr = cartItem._id ? cartItem._id.toString() : "";
+    const itemCompositeKey = `${pIdStr || bIdStr}_${vSku}`;
+
+    if (selectedSet) {
+      const isSelected =
+        selectedSet.has(itemIdStr) ||
+        selectedSet.has(itemCompositeKey) ||
+        selectedSet.has(pIdStr) ||
+        selectedSet.has(bIdStr);
+      if (!isSelected) {
+        continue;
+      }
+    }
+
+    if (cartItem.type === "product" && cartItem.product) {
+      productIds.add(cartItem.product.toString());
+    } else if (cartItem.type === "bundle" && cartItem.bundle) {
+      bundleIds.add(cartItem.bundle.toString());
+    }
+  }
+
+  // 2. Pre-fetch all products & bundles in parallel batch queries
+  const [productsList, bundlesList] = await Promise.all([
+    productIds.size > 0 ? Product.find({ _id: { $in: Array.from(productIds) } }) : [],
+    bundleIds.size > 0 ? Bundle.find({ _id: { $in: Array.from(bundleIds) } }) : [],
+  ]);
+
+  const productMap = new Map();
+  for (const p of productsList) {
+    productMap.set(p._id.toString(), p);
+  }
+
+  const bundleMap = new Map();
+  for (const b of bundlesList) {
+    bundleMap.set(b._id.toString(), b);
+    if (Array.isArray(b.products)) {
+      for (const bp of b.products) {
+        if (bp.product) productIds.add(bp.product.toString());
+      }
+    }
+  }
+
+  // If bundles added child product IDs, fetch them in one query
+  const missingProductIds = Array.from(productIds).filter((id) => !productMap.has(id));
+  if (missingProductIds.length > 0) {
+    const extraProducts = await Product.find({ _id: { $in: missingProductIds } });
+    for (const p of extraProducts) {
+      productMap.set(p._id.toString(), p);
+    }
+  }
+
+  // 3. Batch fetch all inventory records in ONE query
+  const allProductObjectIds = Array.from(productIds).map((id) => new mongoose.Types.ObjectId(id));
+  const inventoriesList = allProductObjectIds.length > 0
+    ? await Inventory.find({ product: { $in: allProductObjectIds } }).lean()
+    : [];
+
+  const inventoryMap = new Map();
+  for (const inv of inventoriesList) {
+    const pKey = inv.product ? inv.product.toString() : "";
+    const vKey = inv.variant_sku || "null";
+    inventoryMap.set(`${pKey}_${vKey}`, inv);
+  }
+
+  // Fast in-memory stock resolution
+  const resolveStockFast = (productId, variantSku = null, requestedQuantity = 1) => {
+    const pIdStr = productId ? productId.toString() : "";
+    const product = productMap.get(pIdStr);
+    if (!product) {
+      return {
+        found: false,
+        product: null,
+        variantObj: null,
+        productName: "Unknown Product",
+        productId: pIdStr,
+        variantId: null,
+        requestedQuantity,
+        availableStock: 0,
+        isAvailable: false,
+      };
+    }
+
+    const vObj =
+      variantSku && Array.isArray(product.variants)
+        ? product.variants.find(
+            (v) => v.sku === variantSku || v._id?.toString() === variantSku
+          )
+        : null;
+
+    const inv = inventoryMap.get(`${pIdStr}_${variantSku || "null"}`) || null;
+    const productForStock = product.toObject ? product.toObject() : { ...product };
+
+    if (inv) {
+      const avail = Math.max(
+        (inv.quantity_on_hand || 0) - (inv.reserved_quantity || 0),
+        0
+      );
+      if (variantSku && Array.isArray(productForStock.variants)) {
+        productForStock.variants = productForStock.variants.map((v) => {
+          if (v.sku === variantSku || v._id?.toString() === variantSku) {
+            return {
+              ...v,
+              available_inventory: avail,
+              qty_on_hand: inv.quantity_on_hand,
+            };
+          }
+          return v;
+        });
+      } else {
+        productForStock.base_available_inventory = avail;
+        productForStock.qty_on_hand = inv.quantity_on_hand;
+      }
+    }
+
+    const availableStock = getAvailableStock(productForStock, variantSku);
+    const isAvailable = availableStock > 0 && requestedQuantity <= availableStock;
+    const productName = vObj?.name || product.name;
+    const variantId = vObj?._id ? vObj._id.toString() : null;
+
+    return {
+      found: true,
+      product,
+      variantObj: vObj,
+      productName,
+      productId: product._id.toString(),
+      variantId,
+      requestedQuantity,
+      availableStock: Math.max(availableStock, 0),
+      isAvailable,
+    };
+  };
 
   let totalAmount = 0;
   let discountedTotalAmount = 0;
@@ -1068,7 +1212,7 @@ const prepareCartOrderData = async ({
     const requestedQty = Number(cartItem.quantity) || 1;
 
     if (cartItem.type === "product") {
-      const stockCheck = await checkProductStock(
+      const stockCheck = resolveStockFast(
         cartItem.product,
         cartItem.variant_sku,
         requestedQty
@@ -1103,7 +1247,7 @@ const prepareCartOrderData = async ({
       orderItems.push(orderItem);
       if (cartItem._id) processedCartItemIds.push(cartItem._id.toString());
     } else if (cartItem.type === "bundle") {
-      const bundle = await Bundle.findById(cartItem.bundle);
+      const bundle = bundleMap.get(cartItem.bundle ? cartItem.bundle.toString() : "");
       if (!bundle) {
         const err = new Error(`Bundle not found: ${cartItem.bundle}`);
         err.statusCode = 400;
@@ -1114,7 +1258,7 @@ const prepareCartOrderData = async ({
       if (bundle.products && Array.isArray(bundle.products)) {
         for (const bundleProduct of bundle.products) {
           const compQty = (bundleProduct.quantity || 1) * requestedQty;
-          const compCheck = await checkProductStock(
+          const compCheck = resolveStockFast(
             bundleProduct.product,
             bundleProduct.variant_sku,
             compQty
@@ -1147,7 +1291,7 @@ const prepareCartOrderData = async ({
 
       if (bundle.products && Array.isArray(bundle.products)) {
         for (const bundleProduct of bundle.products) {
-          const product = await Product.findById(bundleProduct.product);
+          const product = productMap.get(bundleProduct.product ? bundleProduct.product.toString() : "");
           if (product && product.weight_in_grams) {
             totalWeightGrams +=
               product.weight_in_grams *
@@ -1356,10 +1500,12 @@ const createOrder = asyncHandler(async (req, res) => {
   summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
   await summary.cart.save();
 
-  // Send order confirmation emails
+  // Send order confirmation emails asynchronously
   const user = await User.findById(userId);
   if (user) {
-    await sendOrderNotificationEmailsAsync(order, user);
+    sendOrderNotificationEmailsAsync(order, user).catch((emailErr) => {
+      console.error(`Async email notification failed for order ${order._id}:`, emailErr.message);
+    });
   }
 
   return res
@@ -4264,13 +4410,16 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
       .json(new ApiResponse(400, null, "Invalid payment signature", false));
   }
 
-  // 2. Fetch payment details from Razorpay to get payment method & verify status
+  // 2. Fetch payment details from Razorpay to get payment method & verify status (with fast timeout)
   let paymentMethod = null;
   try {
-    const paymentDetails = await razorpay.payments.fetch(razorpay_payment_id);
+    const paymentDetails = await Promise.race([
+      razorpay.payments.fetch(razorpay_payment_id),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Razorpay payment fetch timeout")), 1200)),
+    ]);
     paymentMethod = paymentDetails?.method || null;
   } catch (err) {
-    console.error("Could not fetch payment method from Razorpay:", err.message);
+    console.warn("Could not fetch payment method from Razorpay (non-blocking fallback):", err.message);
   }
 
   // Case A: Existing order verification (when orderId is supplied)
@@ -4386,14 +4535,15 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
         console.error(`Inventory deduction failed for order ${order._id}:`, deductErr.message);
       }
 
-      try {
-        await ensureOrderBillGenerated(order);
-      } catch (billError) {
-        console.error(
-          `Bill generation failed for order ${order._id}:`,
-          billError.message,
-        );
-      }
+      // Generate order bill / invoice PDF asynchronously (non-blocking)
+      setImmediate(() => {
+        ensureOrderBillGenerated(order).catch((billError) => {
+          console.error(
+            `Async bill generation failed for order ${order._id}:`,
+            billError.message,
+          );
+        });
+      });
 
       return res.status(200).json(
         new ApiResponse(
@@ -4562,17 +4712,19 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
     summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
     await summary.cart.save();
 
-    // Generate order bill / invoice PDF
-    try {
-      await ensureOrderBillGenerated(order);
-    } catch (billError) {
-      console.error(`Bill generation failed for order ${order._id}:`, billError.message);
-    }
+    // Generate order bill / invoice PDF asynchronously (non-blocking)
+    setImmediate(() => {
+      ensureOrderBillGenerated(order).catch((billError) => {
+        console.error(`Async bill generation failed for order ${order._id}:`, billError.message);
+      });
+    });
 
-    // Send order confirmation emails
+    // Send order confirmation emails asynchronously
     const user = await User.findById(uid);
     if (user) {
-      await sendOrderNotificationEmailsAsync(order, user);
+      sendOrderNotificationEmailsAsync(order, user).catch((emailErr) => {
+        console.error(`Async email notification failed for order ${order._id}:`, emailErr.message);
+      });
     }
 
     return res.status(200).json(
