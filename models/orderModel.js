@@ -359,7 +359,8 @@ const OrderSchema = new mongoose.Schema({
   },
   paymentId: {
     type: String,
-    default: null
+    default: null,
+    index: true
   },
   // Actual method reported by Razorpay once payment completes (e.g. "upi", "card", "netbanking"), or at doorstep for COD ("cash", "upi")
   paymentMethod: {

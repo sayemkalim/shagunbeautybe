@@ -3737,6 +3737,204 @@ const generatePaymentLinks = asyncHandler(async (req, res) => {
   }
 });
 
+// In-memory mutex map to serialize concurrent order creations for the same razorpayOrderId / paymentId
+const pendingOrderCreations = new Map();
+
+/**
+ * Idempotent and thread-safe helper to create or retrieve an order for a completed Razorpay payment.
+ * Prevents race conditions between the client verify-payment call and the Razorpay webhook.
+ */
+const getOrCreateRazorpayOrder = async ({
+  razorpayOrderId,
+  paymentId,
+  paymentMethod = null,
+  razorpaySignature = null,
+  userId,
+  cartId,
+  addressId,
+  couponCode = null,
+  selectedItemIds = null,
+}) => {
+  const identifier = razorpayOrderId || paymentId;
+  if (!identifier) {
+    throw new Error("Missing razorpayOrderId and paymentId for order resolution");
+  }
+
+  const getSearchConditions = () => {
+    const conditions = [];
+    if (razorpayOrderId) conditions.push({ razorpayOrderId });
+    if (paymentId) conditions.push({ paymentId });
+    return conditions.length > 0 ? { $or: conditions } : null;
+  };
+
+  // 1. Check if order already exists in database
+  const initialQuery = getSearchConditions();
+  if (initialQuery) {
+    const existingOrder = await Order.findOne(initialQuery);
+    if (existingOrder) {
+      let isUpdated = false;
+      if (existingOrder.paymentStatus !== "paid") {
+        existingOrder.paymentStatus = "paid";
+        existingOrder.paidAt = existingOrder.paidAt || new Date();
+        if (existingOrder.status === "pending") {
+          existingOrder.status = "confirmed";
+        }
+        isUpdated = true;
+      }
+      if (paymentId && !existingOrder.paymentId) {
+        existingOrder.paymentId = paymentId;
+        isUpdated = true;
+      }
+      if (razorpayOrderId && !existingOrder.razorpayOrderId) {
+        existingOrder.razorpayOrderId = razorpayOrderId;
+        isUpdated = true;
+      }
+      if (paymentMethod && !existingOrder.paymentMethod) {
+        existingOrder.paymentMethod = paymentMethod;
+        isUpdated = true;
+      }
+      if (razorpaySignature && !existingOrder.razorpaySignature) {
+        existingOrder.razorpaySignature = razorpaySignature;
+        isUpdated = true;
+      }
+      if (isUpdated) {
+        await existingOrder.save();
+      }
+      return { order: existingOrder, isNew: false };
+    }
+  }
+
+  // 2. Concurrency Lock: If order creation is already in-flight for this identifier, await it
+  const lockKey = razorpayOrderId || paymentId;
+  if (pendingOrderCreations.has(lockKey)) {
+    console.log(`[Order Mutex] In-flight order creation detected for ${lockKey}. Awaiting existing process...`);
+    try {
+      const inFlightOrder = await pendingOrderCreations.get(lockKey);
+      if (inFlightOrder) {
+        return { order: inFlightOrder, isNew: false };
+      }
+    } catch (inFlightErr) {
+      console.warn(`[Order Mutex] In-flight order creation rejected:`, inFlightErr.message);
+    }
+
+    const recheckQuery = getSearchConditions();
+    if (recheckQuery) {
+      const savedOrder = await Order.findOne(recheckQuery);
+      if (savedOrder) {
+        return { order: savedOrder, isNew: false };
+      }
+    }
+  }
+
+  // 3. Register lock for current creation
+  let resolveLock, rejectLock;
+  const lockPromise = new Promise((resolve, reject) => {
+    resolveLock = resolve;
+    rejectLock = reject;
+  });
+
+  if (razorpayOrderId) pendingOrderCreations.set(razorpayOrderId, lockPromise);
+  if (paymentId) pendingOrderCreations.set(paymentId, lockPromise);
+
+  try {
+    // Re-verify database once lock is acquired
+    const lockedQuery = getSearchConditions();
+    if (lockedQuery) {
+      const alreadyCreated = await Order.findOne(lockedQuery);
+      if (alreadyCreated) {
+        resolveLock(alreadyCreated);
+        return { order: alreadyCreated, isNew: false };
+      }
+    }
+
+    const summary = await prepareCartOrderData({
+      userId,
+      cartId,
+      addressId,
+      couponCode,
+      selectedItemIds,
+    });
+
+    const newOrder = new Order({
+      user: userId,
+      items: summary.orderItems,
+      address: summary.addressSnapshot,
+      totalAmount: summary.totalAmount,
+      discountedTotalAmount: summary.discountedTotalAmount,
+      shippingCost: summary.shippingCost,
+      shippingDetails: summary.shippingDetails,
+      coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
+      couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
+      couponDiscountAmount: summary.couponDiscountAmount,
+      finalTotalAmount: summary.finalTotalAmount,
+      paymentMode: "ONLINE",
+      paymentStatus: "paid",
+      paymentId: paymentId || null,
+      razorpayOrderId: razorpayOrderId || null,
+      razorpaySignature: razorpaySignature || null,
+      paymentMethod: paymentMethod || null,
+      status: "confirmed",
+      paidAt: new Date(),
+    });
+
+    await newOrder.save();
+
+    // Side-effects (only for the newly created order)
+    if (summary.couponResult) {
+      CouponService.applyCouponUsage({
+        couponId: summary.couponResult.coupon._id,
+        userId,
+        orderId: newOrder._id,
+        discountAmount: summary.couponDiscountAmount,
+        orderTotal: summary.discountedTotalAmount,
+      }).catch((e) => console.error("Coupon usage recording failed:", e.message));
+    }
+
+    InventoryService.deductForOrder(newOrder).catch((e) =>
+      console.error("Inventory deduction failed:", e.message)
+    );
+
+    const orderedIdsSet = new Set(summary.processedCartItemIds);
+    summary.cart.items = summary.cart.items.filter(
+      (ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : "")
+    );
+    await summary.cart.save();
+
+    setImmediate(() => {
+      ensureOrderBillGenerated(newOrder).catch((billError) => {
+        console.error(`Bill generation failed for order ${newOrder._id}:`, billError.message);
+      });
+    });
+
+    const userObj = await User.findById(userId);
+    if (userObj) {
+      sendOrderNotificationEmailsAsync(newOrder, userObj).catch((emailErr) => {
+        console.error(`Async email notification failed for order ${newOrder._id}:`, emailErr.message);
+      });
+    }
+
+    resolveLock(newOrder);
+    return { order: newOrder, isNew: true };
+  } catch (error) {
+    if (error.code === 11000) {
+      console.warn(`[Order Mutex] Duplicate key error caught for ${lockKey}. Fetching saved order...`);
+      const fallbackQuery = getSearchConditions();
+      if (fallbackQuery) {
+        const existing = await Order.findOne(fallbackQuery);
+        if (existing) {
+          resolveLock(existing);
+          return { order: existing, isNew: false };
+        }
+      }
+    }
+    rejectLock(error);
+    throw error;
+  } finally {
+    if (razorpayOrderId) pendingOrderCreations.delete(razorpayOrderId);
+    if (paymentId) pendingOrderCreations.delete(paymentId);
+  }
+};
+
 const handlePaymentWebhook = asyncHandler(async (req, res) => {
   const crypto = require("crypto");
 
@@ -3854,72 +4052,29 @@ const handlePaymentWebhook = asyncHandler(async (req, res) => {
         // Fallback: If verifyRazorpayPayment was not reached by frontend (e.g. app crashed after payment),
         // try to create the order from Razorpay order notes if cartId, addressId, userId are present.
         const notes = payment?.notes || rzpOrderEntity?.notes;
-        const paymentId = payment?.id;
-        if (notes?.cartId && notes?.addressId && notes?.userId && paymentId) {
+        const paymentId = payment?.id || null;
+        const rzpOrderId = payment?.order_id || rzpOrderEntity?.id || null;
+
+        if (notes?.cartId && notes?.addressId && notes?.userId && (paymentId || rzpOrderId)) {
           try {
-            let existing = await Order.findOne({ paymentId });
-            if (!existing) {
-              const summary = await prepareCartOrderData({
-                userId: notes.userId,
-                cartId: notes.cartId,
-                addressId: notes.addressId,
-                couponCode: notes.couponCode || null,
-                selectedItemIds: notes.selectedItemIds ? notes.selectedItemIds.split(",").filter(Boolean) : null,
-              });
+            const { order: webhookOrder, isNew } = await getOrCreateRazorpayOrder({
+              razorpayOrderId: rzpOrderId,
+              paymentId: paymentId,
+              paymentMethod: payment?.method || null,
+              userId: notes.userId,
+              cartId: notes.cartId,
+              addressId: notes.addressId,
+              couponCode: notes.couponCode || null,
+              selectedItemIds: notes.selectedItemIds
+                ? notes.selectedItemIds.split(",").filter(Boolean)
+                : null,
+            });
 
-              const newOrder = new Order({
-                user: notes.userId,
-                items: summary.orderItems,
-                address: summary.addressSnapshot,
-                totalAmount: summary.totalAmount,
-                discountedTotalAmount: summary.discountedTotalAmount,
-                shippingCost: summary.shippingCost,
-                shippingDetails: summary.shippingDetails,
-                coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
-                couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
-                couponDiscountAmount: summary.couponDiscountAmount,
-                finalTotalAmount: summary.finalTotalAmount,
-                paymentMode: "ONLINE",
-                paymentStatus: "paid",
-                paymentId: paymentId,
-                razorpayOrderId: payment?.order_id || rzpOrderEntity?.id,
-                paymentMethod: payment?.method || null,
-                status: "confirmed",
-                paidAt: new Date(),
-              });
-              await newOrder.save();
-
-              if (summary.couponResult) {
-                CouponService.applyCouponUsage({
-                  couponId: summary.couponResult.coupon._id,
-                  userId: notes.userId,
-                  orderId: newOrder._id,
-                  discountAmount: summary.couponDiscountAmount,
-                  orderTotal: summary.discountedTotalAmount,
-                }).catch((e) => console.error("Webhook coupon usage failed:", e.message));
-              }
-
-              InventoryService.deductForOrder(newOrder).catch((e) =>
-                console.error("Webhook inventory deduction failed:", e.message)
-              );
-
-              const orderedIdsSet = new Set(summary.processedCartItemIds);
-              summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
-              await summary.cart.save();
-
-              try {
-                await ensureOrderBillGenerated(newOrder);
-              } catch (billError) {
-                console.error(`Bill generation failed for order ${newOrder._id}:`, billError.message);
-              }
-
-              const userObj = await User.findById(notes.userId);
-              if (userObj) {
-                await sendOrderNotificationEmailsAsync(newOrder, userObj);
-              }
-
-              console.log(`✅ Order ${newOrder._id} created via webhook fallback for payment ${paymentId}`);
-            }
+            console.log(
+              isNew
+                ? `✅ Order ${webhookOrder._id} created via webhook fallback for payment ${paymentId || rzpOrderId}`
+                : `ℹ️ Order ${webhookOrder._id} already handled, synchronized via webhook`
+            );
           } catch (webhookCreateErr) {
             console.error("Failed to auto-create order from webhook notes:", webhookCreateErr.message);
           }
@@ -4577,19 +4732,6 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
 
   // Case B: Option 1 Flow - Create order in DB ONLY NOW after verified payment!
   try {
-    // Idempotency check: see if an order was already created with this payment ID
-    let existingOrder = await Order.findOne({ paymentId: razorpay_payment_id });
-    if (existingOrder) {
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          existingOrder,
-          "Payment already verified and order confirmed",
-          true,
-        ),
-      );
-    }
-
     // Resolve cartId, addressId, couponCode, selectedItemIds (from body or Razorpay order notes)
     let cId = cartId;
     let aId = addressId;
@@ -4637,101 +4779,25 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
         );
     }
 
-    let summary;
-    try {
-      summary = await prepareCartOrderData({
-        userId: uid,
-        cartId: cId,
-        addressId: aId,
-        couponCode: cCode,
-        selectedItemIds: selItemIds,
-      });
-    } catch (err) {
-      if (err.outOfStockItems && Array.isArray(err.outOfStockItems)) {
-        return res.status(400).json({
-          success: false,
-          message: err.message,
-          outOfStockItems: err.outOfStockItems,
-        });
-      }
-      return res.status(400).json(
-        new ApiResponse(
-          400,
-          null,
-          `Failed to place order after payment: ${err.message}`,
-          false,
-        ),
-      );
-    }
-
-    const order = new Order({
-      user: uid,
-      items: summary.orderItems,
-      address: summary.addressSnapshot,
-      totalAmount: summary.totalAmount,
-      discountedTotalAmount: summary.discountedTotalAmount,
-      shippingCost: summary.shippingCost,
-      shippingDetails: summary.shippingDetails,
-      coupon: summary.couponResult ? summary.couponResult.coupon._id : null,
-      couponCode: summary.couponResult ? summary.couponResult.coupon.code : null,
-      couponDiscountAmount: summary.couponDiscountAmount,
-      finalTotalAmount: summary.finalTotalAmount,
-      paymentMode: "ONLINE",
-      paymentStatus: "paid",
-      paymentId: razorpay_payment_id,
+    const { order, isNew } = await getOrCreateRazorpayOrder({
       razorpayOrderId: razorpay_order_id,
-      razorpaySignature: razorpay_signature,
+      paymentId: razorpay_payment_id,
       paymentMethod: paymentMethod,
-      status: "confirmed",
-      paidAt: new Date(),
+      razorpaySignature: razorpay_signature,
+      userId: uid,
+      cartId: cId,
+      addressId: aId,
+      couponCode: cCode,
+      selectedItemIds: selItemIds,
     });
-    await order.save();
-
-    // Apply coupon usage
-    if (summary.couponResult) {
-      CouponService.applyCouponUsage({
-        couponId: summary.couponResult.coupon._id,
-        userId: uid,
-        orderId: order._id,
-        discountAmount: summary.couponDiscountAmount,
-        orderTotal: summary.discountedTotalAmount,
-      }).catch((error) =>
-        console.error(`Coupon usage recording failed for order ${order._id}:`, error.message),
-      );
-    }
-
-    // Deduct inventory atomically
-    try {
-      await InventoryService.deductForOrder(order);
-    } catch (error) {
-      console.error(`Inventory deduction failed for order ${order._id}:`, error.message);
-    }
-
-    // Clear purchased items from cart
-    const orderedIdsSet = new Set(summary.processedCartItemIds);
-    summary.cart.items = summary.cart.items.filter((ci) => !orderedIdsSet.has(ci._id ? ci._id.toString() : ""));
-    await summary.cart.save();
-
-    // Generate order bill / invoice PDF asynchronously (non-blocking)
-    setImmediate(() => {
-      ensureOrderBillGenerated(order).catch((billError) => {
-        console.error(`Async bill generation failed for order ${order._id}:`, billError.message);
-      });
-    });
-
-    // Send order confirmation emails asynchronously
-    const user = await User.findById(uid);
-    if (user) {
-      sendOrderNotificationEmailsAsync(order, user).catch((emailErr) => {
-        console.error(`Async email notification failed for order ${order._id}:`, emailErr.message);
-      });
-    }
 
     return res.status(200).json(
       new ApiResponse(
         200,
         order,
-        "Payment verified and order created successfully",
+        isNew
+          ? "Payment verified and order created successfully"
+          : "Payment verified and order confirmed successfully",
         true,
       ),
     );
